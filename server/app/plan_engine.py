@@ -100,6 +100,8 @@ ZONE_MAP = {
 #  Returns ordered list of (room_type, target_area) per floor
 # ─────────────────────────────────────────────────────────────
 
+MANDATORY_ROOMS = {"vestibule", "cuisine", "salon_famille"}
+
 def build_spatial_program(
     family_size: int,
     generations: int,
@@ -108,7 +110,10 @@ def build_spatial_program(
     floors: int,
     future_floors: int,
     budget_factor: float,         # 0.0=minimum, 1.0=target, 1.5=generous
-    effective_width: float,
+    effective_width: float = 10.0,
+    independent_generations: bool = False,
+    car_count: int = 1,
+    warnings: list = None,
 ) -> dict:
     """
     Build ordered room programs per floor.
@@ -127,7 +132,7 @@ def build_spatial_program(
         return round(mn + (tg - mn) * f, 1)
 
     extra_bedrooms = _calc_bedrooms(family_size, generations)
-    bathrooms_total = _calc_bathrooms(extra_bedrooms, generations, floors)
+    sdb_counts = _calc_bathrooms(extra_bedrooms, generations, floors, independent_generations)
     has_staircase = floors > 0 or future_floors > 0
     needs_grandp_room = generations >= 2
     has_salon_hotes = guest_frequency in ("MEDIUM", "HIGH")
@@ -142,7 +147,10 @@ def build_spatial_program(
 
     # Garage — street facade, always first
     if effective_garage:
-        rdc.append(("garage", area("garage")))
+        if car_count > 0:
+            garage_target_area = 20.0 if car_count == 1 else 30.0
+            # Override the ROOM_SPECS area_target for garage dynamically
+            rdc.append(("garage", garage_target_area))
 
     # Vestibule — mandatory, minimum depth enforced separately
     rdc.append(("vestibule", area("vestibule")))
@@ -170,11 +178,24 @@ def build_spatial_program(
         for i in range(extra_bedrooms):
             rdc.append(("chambre_enfant", area("chambre_enfant")))
 
-        for i in range(bathrooms_total):
-            rdc.append(("sdb_principale" if i == 0 else "sdb_enfants",
-                        area("sdb_principale" if i == 0 else "sdb_enfants")))
+        for room_type, count in sdb_counts.items():
+            if room_type.startswith("sdb_"):
+                for _ in range(count):
+                    rdc.append((room_type, area(room_type)))
 
         rdc.append(("degagement", area("degagement")))
+
+        # Buanderie — standard for family_size >= 4 or multigenerational shared dwelling
+        if family_size >= 4 or (generations >= 2 and not independent_generations):
+            if effective_width >= 6.5:  # only if terrain is wide enough
+                rdc.append(("buanderie", area("buanderie")))
+            elif warnings is not None:
+                warnings.append(
+                    "Buanderie non générée — terrain trop étroit (largeur constructible insuffisante)."
+                )
+
+        program[0] = rdc
+        return program
 
     else:
         # ── Multi-floor — grandparents ground, children upper ─
@@ -184,6 +205,15 @@ def build_spatial_program(
 
         # Staircase on RDC
         rdc.append(("escalier", area("escalier")))
+
+        # Buanderie — standard for family_size >= 4 or multigenerational shared dwelling
+        if family_size >= 4 or (generations >= 2 and not independent_generations):
+            if effective_width >= 6.5:  # only if terrain is wide enough
+                rdc.append(("buanderie", area("buanderie")))
+            elif warnings is not None:
+                warnings.append(
+                    "Buanderie non générée — terrain trop étroit (largeur constructible insuffisante)."
+                )
 
         program[0] = rdc
 
@@ -207,7 +237,7 @@ def build_spatial_program(
                 upper.append(("chambre_enfant", area("chambre_enfant")))
 
             # Distribute bathrooms for children
-            baths_needed = max(0, bathrooms_total - (1 if needs_grandp_room else 0) - 1)
+            baths_needed = sdb_counts.get("sdb_enfants", 0)
             baths_this_floor = baths_needed // floors
             if floor_num <= (baths_needed % floors):
                 baths_this_floor += 1
@@ -217,10 +247,13 @@ def build_spatial_program(
 
             program[floor_num] = upper
 
-        return program
+        # Independent generations: add second cuisine to first upper floor
+        if independent_generations and generations >= 2 and floors >= 1:
+            upper_floor_key = 1
+            if upper_floor_key in program:
+                program[upper_floor_key].append(("cuisine", area("cuisine")))
 
-    program[0] = rdc
-    return program
+        return program
 
 
 def _calc_bedrooms(family_size: int, generations: int) -> int:
@@ -233,13 +266,34 @@ def _calc_bedrooms(family_size: int, generations: int) -> int:
     return max(0, math.ceil(children / 2))
 
 
-def _calc_bathrooms(extra_bedrooms: int, generations: int, floors: int) -> int:
-    """Family bathrooms (not counting guest WC or grandparent SDB)."""
-    total_private_rooms = extra_bedrooms + 1  # +1 for parents
-    base = max(1, math.ceil(total_private_rooms / 2))
-    if floors > 0:
-        base = max(base, floors)  # at least 1 per floor in private zone
-    return base
+def _calc_bathrooms(
+    extra_bedrooms: int,
+    generations: int,
+    floors: int,
+    independent_generations: bool = False,
+) -> dict[str, int]:
+    """
+    Returns count dict: {sdb_principale: N, sdb_enfants: N, wc_separe: N, wc_invites: N}
+    Algerian norm: 1 complete SDB per residential floor unit.
+    """
+    result = {"sdb_principale": 1, "sdb_enfants": 0, "wc_separe": 1, "wc_invites": 0}
+
+    if generations >= 2:
+        if independent_generations:
+            # Each generation gets its own complete SDB
+            result["sdb_principale"] += 1
+        else:
+            # Shared dwelling: grandparents on RDC get accessible bathroom
+            result["sdb_principale"] = max(1, generations - 1)
+
+    if floors >= 1 and not independent_generations:
+        # Upper floor children's bathroom
+        result["sdb_enfants"] = 1
+
+    if extra_bedrooms >= 3:
+        result["sdb_enfants"] = max(result["sdb_enfants"], 1)
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────
@@ -620,6 +674,8 @@ def generate_plan(
     wilaya_name: str,
     seismic_zone: str,
     climate_zone: str,
+    independent_generations: bool = False,
+    car_count: int = 1,
 ) -> tuple[list[FloorOutput], PlanSummary, list[str]]:
     """
     Main plan generation function.
@@ -642,7 +698,10 @@ def generate_plan(
     # ── Build spatial program ─────────────────────────────
     program = build_spatial_program(
         family_size, generations, has_car, guest_frequency,
-        floors, future_floors, budget_factor, effective_width
+        floors, future_floors, budget_factor, effective_width,
+        independent_generations=independent_generations,
+        car_count=car_count,
+        warnings=warnings,
     )
 
     # ── Place rooms per floor ─────────────────────────────
@@ -713,5 +772,15 @@ def generate_plan(
             f"dalle {int(grid.slab_thickness*100)}cm, "
             f"hauteur libre minimum {2.90}m requis."
         )
+
+    # Check for silently dropped mandatory rooms
+    placed_types = {room.room_type for floor in floor_outputs for room in floor.rooms}
+    for mandatory in MANDATORY_ROOMS:
+        if mandatory not in placed_types:
+            label = LABELS.get(mandatory, (mandatory, mandatory))[0]
+            warnings.append(
+                f"Avertissement — La {label} n'a pas pu être placée sur ce terrain. "
+                f"Le programme est incomplet. Réduisez le nombre d'étages ou la taille du programme."
+            )
 
     return floor_outputs, summary, warnings

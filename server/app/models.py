@@ -131,7 +131,7 @@ class GenerateRequest(BaseModel):
         json_schema_extra={"example": 18.0}
     )
     street_orientation: str = Field(
-        default="N",
+        ...,
         description="Orientation de la façade sur rue (N / NE / E / SE / S / SW / W / NW)",
         json_schema_extra={"example": "N"}
     )
@@ -148,16 +148,16 @@ class GenerateRequest(BaseModel):
         json_schema_extra={"example": 5}
     )
     generations: int = Field(
-        default=1,
+        ..., ge=1, le=3,
         description="Nombre de générations (1=nucléaire, 2=avec grands-parents)",
         json_schema_extra={"example": 1}
     )
     has_car: bool = Field(
-        default=True,
+        ...,
         description="La famille possède-t-elle une voiture? (garage requis si oui)"
     )
     guest_frequency: str = Field(
-        default="HIGH",
+        ...,
         description="Fréquence des invités: NEVER / LOW / MEDIUM / HIGH"
     )
 
@@ -168,7 +168,7 @@ class GenerateRequest(BaseModel):
         json_schema_extra={"example": 1}
     )
     future_floors: int = Field(
-        default=0,
+        ..., ge=0, le=4,
         description="Étages prévus ultérieurement (structure pré-dimensionnée)"
     )
 
@@ -178,6 +178,43 @@ class GenerateRequest(BaseModel):
         description="Budget total en Dinars Algériens (DA)",
         json_schema_extra={"example": 18_000_000}
     )
+
+    # ── NEW v2.1 ────────────────────────────────────────────────
+    slope_category: Literal["flat", "slight", "steep"] = Field(
+        ..., description="Inclinaison du terrain"
+    )
+    soil_category: Literal["rocky", "compact", "soft", "unknown"] = Field(
+        ..., description="Type de sol observé"
+    )
+    roof_type: Literal["terrasse_plate", "pitched"] = Field(
+        ..., description="Type de toiture"
+    )
+    finish_level: Literal["economy", "standard", "premium"] = Field(
+        ..., description="Niveau de finitions"
+    )
+    independent_generations: bool = Field(
+        ..., description="Générations avec cuisine et entrée séparées"
+    )
+    car_count: int = Field(
+        ..., ge=0, le=5, description="Nombre de véhicules (0=pas de garage)"
+    )
+    vrd_aep: bool = Field(
+        ..., description="Eau potable disponible sur terrain"
+    )
+    vrd_elec: bool = Field(
+        ..., description="Électricité Sonelgaz disponible"
+    )
+    vrd_gaz: bool = Field(
+        ..., description="Gaz de ville disponible"
+    )
+    vrd_assainissement: bool = Field(
+        ..., description="Réseau d'assainissement disponible"
+    )
+    # Budget scope booleans — sent for logging/transparency; deduction computed client-side
+    budget_includes_land: bool = Field(default=False)
+    budget_includes_architect: bool = Field(default=False)
+    budget_includes_admin: bool = Field(default=False)
+    budget_includes_furniture: bool = Field(default=False)
 
     # ── VALIDATORS ───────────────────────────────────────
 
@@ -202,10 +239,10 @@ class GenerateRequest(BaseModel):
     @field_validator("street_orientation")
     @classmethod
     def validate_orientation(cls, v):
-        v = v.upper()
-        if v not in VALID_ORIENTATIONS:
-            raise ValueError(f"Orientation invalide. Valeurs acceptées: {', '.join(sorted(VALID_ORIENTATIONS))}")
-        return v
+        allowed = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+        if v.upper() not in allowed:
+            raise ValueError(f"street_orientation doit être: {', '.join(sorted(allowed))}")
+        return v.upper()
 
     @field_validator("wilaya")
     @classmethod
@@ -234,9 +271,9 @@ class GenerateRequest(BaseModel):
     @field_validator("guest_frequency")
     @classmethod
     def validate_guest_frequency(cls, v):
-        v = v.upper()
-        if v not in ("NEVER", "LOW", "MEDIUM", "HIGH"):
-            raise ValueError("Fréquence invités invalide: NEVER / LOW / MEDIUM / HIGH")
+        allowed = {"NEVER", "LOW", "MEDIUM", "HIGH"}
+        if v not in allowed:
+            raise ValueError(f"guest_frequency doit être: {', '.join(sorted(allowed))}")
         return v
 
     @field_validator("floors")
@@ -438,6 +475,7 @@ class CostBreakdownLine(BaseModel):
     label_fr: str
     area_m2: float = 0.0
     rate_da_per_m2: int = 0
+    rate_unit: str = "m²"
     amount_min: int
     amount_max: int
     note: str = ""
@@ -459,6 +497,7 @@ class CostEstimateOutput(BaseModel):
     wilaya_name: str
     seismic_zone: str
     rates_note: str                   # e.g. "Taux Oran 2025-2026"
+    price_data_date: str = ""
 
 
 class MaterialItemOutput(BaseModel):
@@ -481,6 +520,7 @@ class MaterialRecommendationOutput(BaseModel):
 
 class GenerateResponseData(BaseModel):
     """Full pipeline output — plan + site + validation + cost + materials."""
+    schema_version: str = "2.0"
     input_params: dict
     site_analysis: SiteAnalysisOutput
     structural_grid: StructuralGridOutput

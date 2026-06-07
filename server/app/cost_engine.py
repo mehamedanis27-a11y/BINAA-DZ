@@ -134,6 +134,47 @@ HAOUCH_WALL_COST_PER_ML = {
 # Extra cost in Phase 1 to allow R+1 later
 FUTURE_PROOFING_RATE = 0.10  # +10% on gros oeuvre for future floor structural upgrade
 
+# ── v2.1 NEW CONSTANTS ───────────────────────────────────────
+
+FINISH_RATE_MULTIPLIERS: dict[str, float] = {
+    "economy":  0.70,
+    "standard": 1.00,
+    "premium":  1.60,
+}
+
+FOUNDATION_SOIL_MULTIPLIERS: dict[str, float] = {
+    "rocky":   1.00,
+    "compact": 1.20,
+    "soft":    1.80,
+    "unknown": 1.80,
+}
+
+SLOPE_SUPPLEMENT_DA: dict[str, tuple[int, int]] = {
+    "flat":   (0, 0),
+    "slight": (300_000, 800_000),
+    "steep":  (800_000, 2_500_000),
+}
+
+ROOF_RATE_DA_PER_M2: dict[str, tuple[int, int]] = {
+    "terrasse_plate": (450, 700),
+    "pitched":        (1_500, 3_500),
+}
+
+VRD_CONNECTION_COSTS_DA: dict[str, tuple[int, int]] = {
+    "aep":            (80_000,  150_000),
+    "elec":           (80_000,  200_000),
+    "gaz":            (60_000,  120_000),
+    "assainissement": (80_000,  250_000),
+}
+
+PLOMBERIE_RATE_PER_WET_ROOM: dict[str, tuple[int, int]] = {
+    "economy":  (200_000, 300_000),
+    "standard": (300_000, 450_000),
+    "premium":  (450_000, 800_000),
+}
+
+PRICE_DATA_DATE = "Juin 2026"
+
 
 # ─────────────────────────────────────────────────────────────
 #  FOUNDATION COST SUPPLEMENT
@@ -144,6 +185,7 @@ def _foundation_supplement(
     footprint_m2: float,
     seismic_zone: str,
     floors: int,
+    soil_category: str = "compact",
 ) -> tuple[int, int, str]:
     """
     Returns (min_supplement, max_supplement, note) for foundation.
@@ -169,8 +211,19 @@ def _foundation_supplement(
     elif floors >= 1:
         base_rate += 1_500
 
-    min_supp = int(footprint_m2 * base_rate * 0.90)
-    max_supp = int(footprint_m2 * base_rate * 1.20)
+    soil_mult = FOUNDATION_SOIL_MULTIPLIERS.get(soil_category, 1.20)
+    foundation_type_note = {
+        "rocky":   "Semelles isolées sur roche",
+        "compact": "Semelles isolées + longrines",
+        "soft":    "Radier général requis — sol meuble",
+        "unknown": "Radier général (sol inconnu — conservatif)",
+    }.get(soil_category, "Semelles isolées")
+    if soil_category == "unknown":
+        note += " — Étude géotechnique recommandée avant terrassement"
+    note = foundation_type_note + " — " + note
+
+    min_supp = int(footprint_m2 * base_rate * 0.90 * soil_mult)
+    max_supp = int(footprint_m2 * base_rate * 1.20 * soil_mult)
 
     return min_supp, max_supp, note
 
@@ -188,6 +241,15 @@ def calculate_cost(
     budget: float,
     terrain_width: float = 0.0,
     terrain_depth: float = 0.0,
+    finish_level: str = "standard",
+    soil_category: str = "compact",
+    slope_category: str = "flat",
+    roof_type: str = "terrasse_plate",
+    vrd_aep: bool = True,
+    vrd_elec: bool = True,
+    vrd_gaz: bool = True,
+    vrd_assainissement: bool = True,
+    wet_rooms: int = 3,
 ) -> CostEstimateOutput:
     """
     Calculate a realistic construction cost estimate.
@@ -216,11 +278,12 @@ def calculate_cost(
 
     # ── 1. FONDATIONS ─────────────────────────────────────────
     found_min, found_max, found_note = _foundation_supplement(
-        footprint_m2, seismic_zone, floors
+        footprint_m2, seismic_zone, floors, soil_category
     )
     breakdown.append(CostBreakdownLine(
         label_fr="Fondations",
         area_m2=footprint_m2,
+        rate_da_per_m2=int(found_min / max(footprint_m2, 1)),
         amount_min=found_min,
         amount_max=found_max,
         note=found_note,
@@ -265,16 +328,33 @@ def calculate_cost(
         breakdown.append(CostBreakdownLine(
             label_fr=f"Pré-engagement structurel R+{future_floors}",
             area_m2=footprint_m2,
+            rate_da_per_m2=int(go_min_adj * FUTURE_PROOFING_RATE),
             amount_min=future_cost_min,
             amount_max=future_cost_max,
             note="Surdimensionnement poteaux + dalle 20cm + réservations (maintenant obligatoire pour extension future)",
         ))
 
+    # ── SLOPE / TERRASSEMENT SUPPLEMENT ──────────────────────
+    slope_min, slope_max = SLOPE_SUPPLEMENT_DA.get(slope_category, (0, 0))
+    if slope_min > 0:
+        breakdown.append(CostBreakdownLine(
+            label_fr="Terrassement / Soutènement",
+            area_m2=footprint_m2,
+            rate_da_per_m2=int(slope_min / max(footprint_m2, 1)),
+            amount_min=slope_min,
+            amount_max=slope_max,
+            note={
+                "slight": "Légère pente — terrassement + murs de soutènement légers",
+                "steep":  "Forte pente — murs de soutènement + excavation importante",
+            }.get(slope_category, ""),
+        ))
+
     # ── 5. FINITION ───────────────────────────────────────────
-    fin_min = int(total_area * rates["fin_min"])
-    fin_max = int(total_area * rates["fin_max"])
+    finish_mult = FINISH_RATE_MULTIPLIERS.get(finish_level, 1.00)
+    fin_min = int(total_area * rates["fin_min"] * finish_mult)
+    fin_max = int(total_area * rates["fin_max"] * finish_mult)
     breakdown.append(CostBreakdownLine(
-        label_fr=f"Finition standard ({total_area:.0f} m²)",
+        label_fr=f"Finition {finish_level} ({total_area:.0f} m²)",
         area_m2=total_area,
         rate_da_per_m2=rates["fin_min"],
         amount_min=fin_min,
@@ -298,22 +378,94 @@ def calculate_cost(
         label_fr=f"Clôture / Haouch ({perimeter_ml:.0f} ml de périmètre)",
         area_m2=0,
         rate_da_per_m2=wall_rate,
+        rate_unit="ml",
         amount_min=haouch_min,
         amount_max=haouch_max,
         note="Mur de clôture béton + hourdis + enduit + portail",
     ))
 
+    # ── TOITURE ───────────────────────────────────────────────
+    roof_rate_min, roof_rate_max = ROOF_RATE_DA_PER_M2.get(roof_type, (450, 700))
+    roof_min = int(footprint_m2 * roof_rate_min)
+    roof_max = int(footprint_m2 * roof_rate_max)
+    roof_label = "Toiture / Étanchéité" if roof_type == "terrasse_plate" else "Toiture / Charpente"
+    roof_note = {
+        "terrasse_plate": "Étanchéité bicouche + isolation thermique + chape de pente",
+        "pitched":        "Charpente bois + couverture tuiles + zinguerie",
+    }.get(roof_type, "")
+    breakdown.append(CostBreakdownLine(
+        label_fr=roof_label,
+        area_m2=footprint_m2,
+        rate_da_per_m2=roof_rate_min,
+        amount_min=roof_min,
+        amount_max=roof_max,
+        note=roof_note,
+    ))
+
+    # ── VRD / RACCORDEMENTS ───────────────────────────────────
+    vrd_total_min = vrd_total_max = 0
+    missing_networks: list[str] = []
+    for network, (cost_min, cost_max), is_connected, label in [
+        ("aep",            VRD_CONNECTION_COSTS_DA["aep"],            vrd_aep,            "Eau potable (AEP)"),
+        ("elec",           VRD_CONNECTION_COSTS_DA["elec"],           vrd_elec,           "Électricité Sonelgaz"),
+        ("gaz",            VRD_CONNECTION_COSTS_DA["gaz"],            vrd_gaz,            "Gaz de ville"),
+        ("assainissement", VRD_CONNECTION_COSTS_DA["assainissement"], vrd_assainissement, "Assainissement"),
+    ]:
+        if not is_connected:
+            vrd_total_min += cost_min
+            vrd_total_max += cost_max
+            missing_networks.append(label)
+
+    if vrd_total_min > 0:
+        vrd_note = "Raccordements à prévoir: " + ", ".join(missing_networks)
+        if not vrd_assainissement:
+            vrd_note += ". Fosse septique requise si réseau d'assainissement absent."
+        breakdown.append(CostBreakdownLine(
+            label_fr="Raccordements VRD",
+            area_m2=0,
+            rate_da_per_m2=0,
+            amount_min=vrd_total_min,
+            amount_max=vrd_total_max,
+            note=vrd_note,
+        ))
+
+    # ── PLOMBERIE SANITAIRES ──────────────────────────────────
+    plomb_rate_min, plomb_rate_max = PLOMBERIE_RATE_PER_WET_ROOM.get(finish_level, (300_000, 450_000))
+    plomb_min = wet_rooms * plomb_rate_min
+    plomb_max = wet_rooms * plomb_rate_max
+    breakdown.append(CostBreakdownLine(
+        label_fr=f"Plomberie sanitaires ({wet_rooms} pièces humides)",
+        area_m2=0,
+        rate_da_per_m2=0,
+        amount_min=plomb_min,
+        amount_max=plomb_max,
+        note=f"Cuisine + SDB + WC — niveau {finish_level}. Tuyauterie PPR + appareils sanitaires.",
+    ))
+    # Reduce finition min/max by 15% to avoid double-counting plomberie
+    # (plomberie was previously absorbed into the finition aggregate rate)
+    fin_min = int(fin_min * 0.85)
+    fin_max = int(fin_max * 0.85)
+    # Update the finition breakdown line that was already appended
+    for line in breakdown:
+        if line.label_fr.startswith("Finition"):
+            line.amount_min = fin_min
+            line.amount_max = fin_max
+            break
+
     # ── 7. SOUS-TOTAL ──────────────────────────────────────────
-    subtotal_min = (found_min + go_rdc_min + go_upper_min +
-                    future_cost_min + fin_min + haouch_min)
-    subtotal_max = (found_max + go_rdc_max + go_upper_max +
-                    future_cost_max + fin_max + haouch_max)
+    subtotal_min = (found_min + slope_min + go_rdc_min + go_upper_min +
+                    future_cost_min + fin_min + haouch_min +
+                    roof_min + vrd_total_min + plomb_min)
+    subtotal_max = (found_max + slope_max + go_rdc_max + go_upper_max +
+                    future_cost_max + fin_max + haouch_max +
+                    roof_max + vrd_total_max + plomb_max)
 
     # ── 8. IMPRÉVUS (CONTINGENCY) — MANDATORY ─────────────────
     contingency_min = int(subtotal_min * CONTINGENCY_RATE)
     contingency_max = int(subtotal_max * CONTINGENCY_RATE)
     breakdown.append(CostBreakdownLine(
         label_fr="Imprévus (20%) — OBLIGATOIRE",
+        rate_da_per_m2=0,
         amount_min=contingency_min,
         amount_max=contingency_max,
         note="Algérie: inflation matériaux, problèmes de chantier, modifications en cours. NON OPTIONNEL.",
@@ -352,6 +504,7 @@ def calculate_cost(
         wilaya_name=wilaya_name,
         seismic_zone=seismic_zone,
         rates_note=f"Taux {wilaya_name} 2025-2026 — zone sismique {seismic_zone}",
+        price_data_date=PRICE_DATA_DATE,
     )
 
 

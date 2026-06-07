@@ -47,9 +47,8 @@ async def generate_plan_endpoint(request: GenerateRequest):
     Executes the 8-module pipeline in strict order.
     """
 
-    # ── M0: FEASIBILITY GATE ──────────────────────────────────
-    # Quick check before any real computation
-    site_preview = analyze_site(
+    # ── M0 + M1: SITE ANALYSIS (single call, reused for feasibility gate) ──
+    site = analyze_site(
         request.terrain_width,
         request.terrain_depth,
         request.street_orientation,
@@ -57,7 +56,7 @@ async def generate_plan_endpoint(request: GenerateRequest):
     )
 
     blockers = check_feasibility(
-        site_preview,
+        site,
         request.floors,
         request.budget,
         request.wilaya,
@@ -75,14 +74,6 @@ async def generate_plan_endpoint(request: GenerateRequest):
             ).model_dump(),
         )
 
-    # ── M1: SITE ANALYSIS ─────────────────────────────────────
-    site = analyze_site(
-        request.terrain_width,
-        request.terrain_depth,
-        request.street_orientation,
-        request.wilaya,
-    )
-
     # ── M3: STRUCTURAL GRID ───────────────────────────────────
     grid = generate_structural_grid(
         effective_width=site.effective_width_m,
@@ -98,7 +89,9 @@ async def generate_plan_endpoint(request: GenerateRequest):
         effective_depth=site.effective_depth_m,
         family_size=request.family_size,
         generations=request.generations,
+        independent_generations=request.independent_generations,
         has_car=request.has_car,
+        car_count=request.car_count,
         guest_frequency=request.guest_frequency,
         floors=request.floors,
         future_floors=request.future_floors,
@@ -115,23 +108,18 @@ async def generate_plan_endpoint(request: GenerateRequest):
     plan_summary.terrain_area_m2 = site.terrain_area_m2
     plan_summary.setback_loss_percent = site.setback_loss_percent
 
-    # ── M7: VALIDATION ────────────────────────────────────────
-    validation = validate_plan(
-        floors=floor_outputs,
-        seismic_zone=site.seismic_zone,
-        climate_zone=site.climate_zone,
-        max_span_m=grid.max_span,
-        has_car=request.has_car,
-        guest_frequency=request.guest_frequency,
-    )
-
-    # Block output on UNBUILDABLE (only critical failures)
-    if validation.status == "UNBUILDABLE":
-        # We still return the plan so the frontend can show what's wrong,
-        # but add a top-level warning and set HTTP 207 (multi-status)
-        pass  # Handled in response — frontend shows red overlay
-
     # ── M8: COST ENGINE ───────────────────────────────────────
+    # Compute wet room count from generated floor plan
+    wet_rooms = sum(
+        1 for floor in floor_outputs
+        for room in floor.rooms
+        if room.room_type in {
+            "cuisine", "sdb_principale", "sdb_enfants",
+            "wc_separe", "wc_invites", "buanderie"
+        }
+    )
+    wet_rooms = max(wet_rooms, 2)  # minimum 2 wet rooms always
+
     cost_estimate = calculate_cost(
         footprint_m2=site.effective_area_m2,
         floors=request.floors,
@@ -141,14 +129,45 @@ async def generate_plan_endpoint(request: GenerateRequest):
         budget=request.budget,
         terrain_width=request.terrain_width,
         terrain_depth=request.terrain_depth,
+        finish_level=request.finish_level,
+        soil_category=request.soil_category,
+        slope_category=request.slope_category,
+        roof_type=request.roof_type,
+        vrd_aep=request.vrd_aep,
+        vrd_elec=request.vrd_elec,
+        vrd_gaz=request.vrd_gaz,
+        vrd_assainissement=request.vrd_assainissement,
+        wet_rooms=wet_rooms,
     )
+
+    # ── M7: VALIDATION ────────────────────────────────────────
+    validation = validate_plan(
+        floors=floor_outputs,
+        seismic_zone=site.seismic_zone,
+        climate_zone=site.climate_zone,
+        max_span_m=grid.max_span,
+        has_car=request.has_car,
+        guest_frequency=request.guest_frequency,
+        soil_category=request.soil_category,
+        slope_category=request.slope_category,
+        finish_level=request.finish_level,
+        budget_status=cost_estimate.budget_status,
+    )
+
+    # Block output on UNBUILDABLE (only critical failures)
+    if validation.status == "UNBUILDABLE":
+        # We still return the plan so the frontend can show what's wrong,
+        # but add a top-level warning and set HTTP 207 (multi-status)
+        pass  # Handled in response — frontend shows red overlay
 
     # ── MATERIALS ─────────────────────────────────────────────
     materials = get_material_recommendations(
         budget_status=cost_estimate.budget_status,
+        total_floor_area_m2=plan_summary.total_built_area_m2,
         seismic_zone=site.seismic_zone,
         climate_zone=site.climate_zone,
         wilaya=request.wilaya,
+        finish_level=request.finish_level,
     )
 
     # ── ASSEMBLE RESPONSE ─────────────────────────────────────

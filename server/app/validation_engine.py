@@ -529,6 +529,10 @@ def validate_plan(
     max_span_m: float,
     has_car: bool,
     guest_frequency: str,
+    soil_category: str = "compact",
+    slope_category: str = "flat",
+    finish_level: str = "standard",
+    budget_status: str = "sufficient",
 ) -> ValidationReport:
     """
     Run all validation layers and return a complete ValidationReport.
@@ -541,6 +545,44 @@ def validate_plan(
     all_issues += _validate_structural(floors, seismic_zone, max_span_m)
     all_issues += _validate_climate(floors, climate_zone)
     all_issues += _validate_circulation(floors)
+
+    # ── GEOTECHNICAL RISK ─────────────────────────────────────────
+    if slope_category == "steep" and soil_category in ("soft", "unknown"):
+        all_issues.append(ValidationIssue(
+            severity="HIGH",
+            code="GEOTECHNICAL_RISK",
+            message_fr=(
+                "Terrain en forte pente sur sol meuble ou inconnu — "
+                "risque géotechnique élevé. Étude de sol obligatoire "
+                "avant tout terrassement."
+            ),
+            suggested_fix="Commandez une étude géotechnique (CTC ou bureau d'études agréé) avant toute fouille.",
+        ))
+    elif soil_category == "unknown":
+        all_issues.append(ValidationIssue(
+            severity="MEDIUM",
+            code="SOIL_UNKNOWN",
+            message_fr=(
+                "Type de sol non renseigné — hypothèse conservative (radier général) appliquée. "
+                "Une étude géotechnique permettrait d'optimiser les fondations."
+            ),
+            suggested_fix="Faites analyser le sol par un géotechnicien pour optimiser les fondations.",
+        ))
+
+    # ── FINISH / BUDGET COHERENCE ─────────────────────────────────
+    if finish_level == "premium" and budget_status in ("tight", "insufficient"):
+        all_issues.append(ValidationIssue(
+            severity="MEDIUM",
+            code="FINISH_BUDGET_MISMATCH",
+            message_fr=(
+                "Finitions haut standing sélectionnées alors que le budget est serré. "
+                "Vérifiez la cohérence avant de vous engager avec les artisans."
+            ),
+            suggested_fix=(
+                "Priorisez les finitions haut standing dans les pièces principales (salon, chambre parents). "
+                "Optez pour finition économique dans les espaces secondaires."
+            ),
+        ))
 
     # Score and classify
     total_score = sum(SEVERITY_SCORE[i.severity] for i in all_issues)

@@ -13,6 +13,7 @@ Run with:
   uvicorn app.main:app --reload --port 8000
 """
 
+import os
 import logging
 import json
 from contextlib import asynccontextmanager
@@ -21,6 +22,9 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from .routes import router
 from .models import ErrorResponse, ErrorDetail
@@ -73,16 +77,16 @@ app = FastAPI(
 #  CORS — Allow frontend to connect
 # ──────────────────────────────────────────────
 
+_cors_env = os.getenv(
+    "CORS_ORIGINS",
+    "http://localhost:3000,http://localhost:3001,http://localhost:5173,"
+    "http://127.0.0.1:3000,http://127.0.0.1:3001,http://127.0.0.1:5173"
+)
+_cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",     # Vite dev server
-        "http://localhost:3001",     # Vite fallback port
-        "http://localhost:5173",     # Vite default port
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -159,8 +163,4 @@ async def general_exception_handler(request: Request, exc: Exception):
 #  REGISTER ROUTES
 # ──────────────────────────────────────────────
 
-app.include_router(router, prefix="/api", tags=["Generation"])
-
-# Also mount at root /generate for direct frontend compatibility
-# (the frontend POSTs to http://localhost:8000/generate)
-app.include_router(router, tags=["Generation (root)"])
+app.include_router(router, prefix="/api/v1", tags=["Generation"])

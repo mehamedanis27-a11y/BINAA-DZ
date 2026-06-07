@@ -30,154 +30,129 @@ const ROOM_MIN_RENDER_SIZE = 30
 const LABEL_FONT_SIZE = 11
 const AREA_FONT_SIZE = 10
 
-/**
- * Simple row-based bin-packing algorithm.
- * 
- * Arranges rooms as rectangles inside a bounding container,
- * filling rows left-to-right, top-to-bottom. Each room's visual
- * width is proportional to its area relative to the footprint.
- * 
- * This is NOT a real spatial floor plan — it's a programmatic
- * diagram showing room sizes and zones. Real spatial placement
- * would require the M2 engine to output x,y coordinates.
- */
-function layoutRooms(rooms, containerWidth, containerHeight) {
-  const totalArea = rooms.reduce((sum, r) => sum + r.area_m2, 0)
-  if (totalArea === 0) return []
+function renderFromCoordinates(ctx, rooms, effectiveWidth, effectiveDepth, canvasW, canvasH, lang) {
+  const PADDING = 24
+  const drawW = canvasW - PADDING * 2
+  const drawH = canvasH - PADDING * 2
+  const scaleX = drawW / effectiveWidth
+  const scaleY = drawH / effectiveDepth
+  const scale  = Math.min(scaleX, scaleY)
+  const offsetX = PADDING + (drawW - effectiveWidth * scale) / 2
+  const offsetY = PADDING + (drawH - effectiveDepth * scale) / 2
 
-  // Scale factor: pixels per m²
-  const availableArea = containerWidth * containerHeight
-  const scale = Math.sqrt(availableArea / totalArea) * 0.85
-
-  const laid = []
-  let curX = 0
-  let curY = 0
-  let rowHeight = 0
-
-  // Sort: large rooms first for better packing
-  const sorted = [...rooms].sort((a, b) => b.area_m2 - a.area_m2)
-
-  for (const room of sorted) {
-    // Room dimensions: try to make roughly square-ish
-    const area = room.area_m2 * scale * scale
-    const aspect = room.room_type === 'corridor' || room.room_type === 'hall_entry' ? 2.5 : 1.3
-    let w = Math.sqrt(area * aspect)
-    let h = area / w
-
-    // Enforce minimums
-    w = Math.max(w, ROOM_MIN_RENDER_SIZE)
-    h = Math.max(h, ROOM_MIN_RENDER_SIZE)
-
-    // Wrap to next row if it doesn't fit
-    if (curX + w > containerWidth && curX > 0) {
-      curX = 0
-      curY += rowHeight + ROOM_GAP
-      rowHeight = 0
-    }
-
-    laid.push({
-      ...room,
-      x: curX,
-      y: curY,
-      w: Math.round(w),
-      h: Math.round(h),
-    })
-
-    curX += w + ROOM_GAP
-    rowHeight = Math.max(rowHeight, h)
+  const ZONE_COLORS = {
+    public:       { fill: 'rgba(42,95,143,0.85)',  stroke: '#3a7fc0', text: '#e0f0ff' },
+    'semi-public':{ fill: 'rgba(74,122,62,0.85)',  stroke: '#5e9e4e', text: '#e0ffe0' },
+    private:      { fill: 'rgba(139,90,60,0.85)',  stroke: '#a8704e', text: '#ffe8d6' },
+    service:      { fill: 'rgba(90,90,110,0.85)',  stroke: '#7a7a8e', text: '#e0e0f0' },
+    circulation:  { fill: 'rgba(61,61,77,0.85)',   stroke: '#5d5d6d', text: '#c0c0d0' },
   }
 
-  return laid
-}
-
-
-/**
- * Draw the entire floor plan onto a canvas context.
- */
-function drawFloor(ctx, floorData, canvasWidth, canvasHeight, pixelRatio) {
-  const w = canvasWidth
-  const h = canvasHeight
-
-  // Clear
-  ctx.clearRect(0, 0, w * pixelRatio, h * pixelRatio)
+  // Draw plot boundary (dashed)
   ctx.save()
-  ctx.scale(pixelRatio, pixelRatio)
-
-  // Background — deep architectural blue canvas
-  ctx.fillStyle = '#152C4A'
-  ctx.fillRect(0, 0, w, h)
-
-  // Title bar
-  ctx.fillStyle = '#1E3A5F'
-  ctx.fillRect(0, 0, w, 40)
-  ctx.fillStyle = '#D6B98C'
-  ctx.font = `bold 14px 'Inter', system-ui, sans-serif`
-  ctx.textAlign = 'left'
-  ctx.fillText(
-    `${floorData.floor_label} — ${floorData.total_floor_area_m2} m²`,
-    CANVAS_PADDING, 26
-  )
-  ctx.fillStyle = '#8B949E'
-  ctx.font = `12px 'Inter', system-ui, sans-serif`
-  ctx.textAlign = 'right'
-  ctx.fillText(
-    `Pièces: ${floorData.rooms.length} | Circulation: ${floorData.circulation_area_m2} m²`,
-    w - CANVAS_PADDING, 26
-  )
-
-  // Layout area
-  const layoutX = CANVAS_PADDING
-  const layoutY = 50
-  const layoutW = w - CANVAS_PADDING * 2
-  const layoutH = h - 60
-
-  // Buildable area outline
-  ctx.strokeStyle = '#30363D'
-  ctx.lineWidth = 1
   ctx.setLineDash([4, 4])
-  ctx.strokeRect(layoutX, layoutY, layoutW, layoutH)
+  ctx.strokeStyle = 'rgba(255,255,255,0.15)'
+  ctx.lineWidth = 1
+  ctx.strokeRect(offsetX, offsetY, effectiveWidth * scale, effectiveDepth * scale)
   ctx.setLineDash([])
+  ctx.restore()
 
-  // Layout rooms
-  const laidRooms = layoutRooms(floorData.rooms, layoutW, layoutH)
+  // Draw rooms
+  rooms.forEach(room => {
+    const rx = offsetX + room.x * scale
+    const ry = offsetY + room.y * scale
+    const rw = room.width  * scale
+    const rh = room.height * scale
 
-  for (const room of laidRooms) {
-    const rx = layoutX + room.x
-    const ry = layoutY + room.y
-    const rw = room.w
-    const rh = room.h
-    const colors = ZONE_COLORS[room.zone] || ZONE_COLORS.circulation
+    const colors = ZONE_COLORS[room.zone] ?? ZONE_COLORS.service
 
-    // Room fill
+    // Fill
     ctx.fillStyle = colors.fill
     ctx.fillRect(rx, ry, rw, rh)
 
-    // Room border
-    ctx.strokeStyle = colors.stroke
-    ctx.lineWidth = 1.5
-    ctx.strokeRect(rx, ry, rw, rh)
+    // Borders — exterior walls heavier
+    const sides = [
+      { axis: 'N', x1: rx,    y1: ry,    x2: rx+rw, y2: ry    },
+      { axis: 'S', x1: rx,    y1: ry+rh, x2: rx+rw, y2: ry+rh },
+      { axis: 'W', x1: rx,    y1: ry,    x2: rx,    y2: ry+rh },
+      { axis: 'E', x1: rx+rw, y1: ry,    x2: rx+rw, y2: ry+rh },
+    ]
+    sides.forEach(({ axis, x1, y1, x2, y2 }) => {
+      const isExterior = room[`has_exterior_wall_${axis}`] === true
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.strokeStyle = isExterior ? colors.stroke : 'rgba(255,255,255,0.25)'
+      ctx.lineWidth   = isExterior ? 2.5 : 1
+      ctx.stroke()
+    })
 
-    // Room label (French)
-    if (rw > 40 && rh > 25) {
-      ctx.fillStyle = colors.text
-      ctx.font = `600 ${LABEL_FONT_SIZE}px 'Inter', system-ui, sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
+    // Label
+    const label = (lang === 'ar' ? room.label_ar : room.label_fr) || room.label_fr || room.room_type
+    const fontSize = Math.max(9, Math.min(12, rw / 8))
+    ctx.font = `${fontSize}px sans-serif`
+    ctx.fillStyle = colors.text
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, rx + rw / 2, ry + rh / 2, rw - 4)
 
-      const label = room.label_fr.length > 16
-        ? room.label_fr.substring(0, 14) + '…'
-        : room.label_fr
-      ctx.fillText(label, rx + rw / 2, ry + rh / 2 - 7)
-
-      // Area below label
-      ctx.fillStyle = colors.text
-      ctx.globalAlpha = 0.7
-      ctx.font = `${AREA_FONT_SIZE}px 'Inter', system-ui, sans-serif`
-      ctx.fillText(`${room.area_m2} m²`, rx + rw / 2, ry + rh / 2 + 8)
-      ctx.globalAlpha = 1.0
+    // Area label (small, below room name)
+    if (rw > 40 && rh > 30) {
+      ctx.font = `${Math.max(8, fontSize - 2)}px sans-serif`
+      ctx.fillStyle = 'rgba(255,255,255,0.45)'
+      ctx.fillText(`${room.area_m2?.toFixed(1) ?? ''}m²`, rx + rw / 2, ry + rh / 2 + fontSize + 1, rw - 4)
     }
-  }
+  })
+}
 
+function renderNorthArrow(ctx, canvasW, orientation) {
+  const cx = canvasW - 28
+  const cy = 28
+  const r  = 12
+  ctx.save()
+  ctx.font = 'bold 10px sans-serif'
+  ctx.fillStyle = 'rgba(255,255,255,0.7)'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('N', cx, cy - r - 4)
+  ctx.beginPath()
+  ctx.moveTo(cx, cy - r)
+  ctx.lineTo(cx - 5, cy + r / 2)
+  ctx.lineTo(cx, cy)
+  ctx.closePath()
+  ctx.fillStyle = '#fff'
+  ctx.fill()
+  ctx.beginPath()
+  ctx.moveTo(cx, cy - r)
+  ctx.lineTo(cx + 5, cy + r / 2)
+  ctx.lineTo(cx, cy)
+  ctx.closePath()
+  ctx.fillStyle = 'rgba(255,255,255,0.3)'
+  ctx.fill()
+  ctx.restore()
+}
+
+function renderScaleBar(ctx, scale, canvasH) {
+  const barMeters = 5
+  const barPx = barMeters * scale
+  const x = 20
+  const y = canvasH - 18
+  ctx.save()
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x + barPx, y)
+  ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 4); ctx.stroke()
+  ctx.beginPath()
+  ctx.moveTo(x + barPx, y - 4); ctx.lineTo(x + barPx, y + 4); ctx.stroke()
+  ctx.font = '10px monospace'
+  ctx.fillStyle = 'rgba(255,255,255,0.6)'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillText(`${barMeters}m`, x + barPx / 2, y + 6)
   ctx.restore()
 }
 
@@ -196,45 +171,92 @@ export default function PlanViewer({ planData, onNewProject }) {
 
   // ── Draw on canvas whenever floor changes ──
   useEffect(() => {
-    if (!canvasRef.current || !currentFloor) return
-
     const canvas = canvasRef.current
+    if (!canvas || !currentFloor) return
+
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.parentElement.getBoundingClientRect()
+    canvas.width  = rect.width  * dpr
+    canvas.height = rect.height * dpr
+    canvas.style.width = `${rect.width}px`
+    canvas.style.height = `${rect.height}px`
+
     const ctx = canvas.getContext('2d')
-    const pixelRatio = window.devicePixelRatio || 1
+    ctx.scale(dpr, dpr)
 
-    // Size canvas to container
-    const container = canvas.parentElement
-    const width = container.clientWidth
-    const height = Math.max(400, Math.min(600, width * 0.75))
+    const W = rect.width
+    const H = rect.height
 
-    canvas.width = width * pixelRatio
-    canvas.height = height * pixelRatio
-    canvas.style.width = `${width}px`
-    canvas.style.height = `${height}px`
+    // Clear
+    ctx.clearRect(0, 0, W, H)
 
-    drawFloor(ctx, currentFloor, width, height, pixelRatio)
-  }, [currentFloor, activeFloor])
+    // Background
+    ctx.fillStyle = '#0f1117'
+    ctx.fillRect(0, 0, W, H)
+
+    const site = planData.data ? planData.data.site_analysis : planData.site_analysis
+    const effectiveW = site.effective_width_m
+    const effectiveD = site.effective_depth_m
+
+    // Determine language from document dir or a prop
+    const lang = document.documentElement.dir === 'rtl' ? 'ar' : 'fr'
+
+    // Compute uniform scale
+    const PADDING = 24
+    const usableW = W - PADDING * 2
+    const usableH = H - PADDING * 2
+    const scale = Math.min(usableW / effectiveW, usableH / effectiveD)
+
+    renderFromCoordinates(ctx, currentFloor.rooms, effectiveW, effectiveD, W, H, lang)
+    renderNorthArrow(ctx, W, site.solar_priority_orientation)
+    renderScaleBar(ctx, scale, H)
+  }, [currentFloor, planData])
 
   // ── Redraw on resize ──
   useEffect(() => {
     const handleResize = () => {
-      if (!canvasRef.current || !currentFloor) return
       const canvas = canvasRef.current
+      if (!canvas || !currentFloor) return
+
+      const dpr = window.devicePixelRatio || 1
+      const rect = canvas.parentElement.getBoundingClientRect()
+      canvas.width  = rect.width  * dpr
+      canvas.height = rect.height * dpr
+      canvas.style.width = `${rect.width}px`
+      canvas.style.height = `${rect.height}px`
+
       const ctx = canvas.getContext('2d')
-      const pixelRatio = window.devicePixelRatio || 1
-      const container = canvas.parentElement
-      const width = container.clientWidth
-      const height = Math.max(400, Math.min(600, width * 0.75))
-      canvas.width = width * pixelRatio
-      canvas.height = height * pixelRatio
-      canvas.style.width = `${width}px`
-      canvas.style.height = `${height}px`
-      drawFloor(ctx, currentFloor, width, height, pixelRatio)
+      ctx.scale(dpr, dpr)
+
+      const W = rect.width
+      const H = rect.height
+
+      // Clear
+      ctx.clearRect(0, 0, W, H)
+
+      // Background
+      ctx.fillStyle = '#0f1117'
+      ctx.fillRect(0, 0, W, H)
+
+      const site = planData.data ? planData.data.site_analysis : planData.site_analysis
+      const effectiveW = site.effective_width_m
+      const effectiveD = site.effective_depth_m
+
+      const lang = document.documentElement.dir === 'rtl' ? 'ar' : 'fr'
+
+      const PADDING = 24
+      const usableW = W - PADDING * 2
+      const usableH = H - PADDING * 2
+      const scale = Math.min(usableW / effectiveW, usableH / effectiveD)
+
+      renderFromCoordinates(ctx, currentFloor.rooms, effectiveW, effectiveD, W, H, lang)
+      renderNorthArrow(ctx, W, site.solar_priority_orientation)
+      renderScaleBar(ctx, scale, H)
     }
 
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
-  }, [currentFloor])
+  }, [currentFloor, planData])
 
   if (!planData || !floors.length) return null
 

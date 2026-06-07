@@ -40,6 +40,7 @@ BUDGET LOGIC:
 """
 
 from __future__ import annotations
+from .models import MaterialRecommendationOutput, MaterialItemOutput
 
 
 # ──────────────────────────────────────────────────────
@@ -336,10 +337,13 @@ def get_material_recommendations(
     seismic_zone: str = "MEDIUM",
     climate_zone: str = "COASTAL",
     wilaya: str = "31",
-) -> dict:
+    finish_level: str = "standard",
+) -> MaterialRecommendationOutput:
     """
-    Return material recommendations based on budget status.
-    PATCH v2: added seismic_zone, climate_zone, wilaya params.
+    Return material recommendations based on budget status and finish level.
+
+    v2.1: Added finish_level cross-reference with budget_status.
+    Returns typed MaterialRecommendationOutput.
 
     Args:
         budget_status:      One of "insufficient", "tight", "sufficient", "comfortable".
@@ -347,19 +351,25 @@ def get_material_recommendations(
         seismic_zone:       HIGH / MEDIUM / LOW (from wilaya).
         climate_zone:       COASTAL / HIGHLAND / ARID / SAHARAN.
         wilaya:             2-digit wilaya code.
-
-    Returns:
-        Dictionary matching MaterialRecommendationOutput schema.
-        NOTE: gros_oeuvres and finition are TOP-LEVEL keys (no recommendations wrapper).
+        finish_level:       One of "economy", "standard", "premium".
     """
 
-    # Map budget status → package key
+    # Map budget status → initial package key
     if budget_status == "comfortable":
         package_key = "premium"
     elif budget_status == "sufficient":
         package_key = "standard"
     else:
         package_key = "economy"
+
+    # Cross-reference budget_status with finish_level
+    finish_tier_map = {"economy": 0, "standard": 1, "premium": 2}
+    budget_tier_map = {"insufficient": 0, "tight": 0, "sufficient": 1, "comfortable": 2}
+    finish_tier = finish_tier_map.get(finish_level, 1)
+    budget_tier = budget_tier_map.get(budget_status, 1)
+
+    # Use the requested finish level — override budget-based package
+    package_key = ["economy", "standard", "premium"][finish_tier]
 
     package = MATERIAL_PACKAGES[package_key]
 
@@ -369,6 +379,14 @@ def get_material_recommendations(
 
     # Pick 2 tips maximum (keep response concise)
     selected_tips = tips[:2]
+
+    # Warn if finish level exceeds budget
+    if finish_tier > budget_tier:
+        selected_tips.insert(0,
+            f"Finitions {finish_level} demandées mais budget {budget_status} — "
+            f"priorisez les finitions haut de gamme dans les espaces de vie principaux "
+            f"(salon, chambre parentale) et économisez sur les espaces secondaires."
+        )
 
     # Add area-specific tip if house is large
     if total_floor_area_m2 > 400 and budget_status != "comfortable":
@@ -411,18 +429,20 @@ def get_material_recommendations(
             "Isolation des murs extérieurs conseillée",
         ]
 
-    return {
-        "package_level": package["package_level"],
-        "package_level_key": package["package_level_key"],
-        "description": package["description"],
-        # PATCH v2: gros_oeuvres and finition are TOP-LEVEL (no recommendations wrapper)
-        # This matches MaterialRecommendationOutput schema in models.py
-        "gros_oeuvres": package["gros_oeuvres"],
-        "finition": package["finition"],
-        "seismic_requirements": seismic_reqs,
-        "climate_requirements": climate_reqs,
-        "cost_saving_tips": selected_tips,
-    }
+    return MaterialRecommendationOutput(
+        package_level=package["package_level"],
+        package_level_key=package["package_level_key"],
+        description=package["description"],
+        gros_oeuvres=[
+            MaterialItemOutput(**item) for item in package["gros_oeuvres"]
+        ],
+        finition=[
+            MaterialItemOutput(**item) for item in package["finition"]
+        ],
+        seismic_requirements=seismic_reqs,
+        climate_requirements=climate_reqs,
+        cost_saving_tips=selected_tips,
+    )
 
 
 # ──────────────────────────────────────────────────────

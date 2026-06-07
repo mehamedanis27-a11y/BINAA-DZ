@@ -4,20 +4,16 @@ import ResultsScreen from './ResultsScreen'
 /* ============================================================
    Wizard — BINAA User Input Wizard (Architectural-Tech UI)
 
-   PATCH v2 — added to Step 1 (Terrain):
-     - terrain_width  (float, meters)
-     - terrain_depth  (float, meters)
-     - wilaya         (selector, 58 wilayas)
-   Removed: land_size (was a single float — backend no longer accepts it)
-
-   All other steps, UI design, animations, and logic are unchanged.
+   6-step wizard collecting terrain, budget, volume, family,
+   finitions, and summary before submitting to POST /api/v1/generate.
    ============================================================ */
 
 const STEPS = [
   { id: 'land',    label: 'Terrain',  icon: 'landscape' },
   { id: 'budget',  label: 'Budget',   icon: 'payments' },
-  { id: 'floors',  label: 'Étages',   icon: 'apartment' },
+  { id: 'build',   label: 'Volume',   icon: 'domain' },
   { id: 'family',  label: 'Famille',  icon: 'family_restroom' },
+  { id: 'finishes',label: 'Finitions',icon: 'format_paint' },
   { id: 'summary', label: 'Résumé',   icon: 'checklist' },
 ]
 
@@ -130,7 +126,7 @@ const VALIDATION = {
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-const API_URL  = `${API_BASE}/generate`
+const API_URL  = `${API_BASE}/api/v1/generate`
 
 function formatNumber(num) {
   if (!num && num !== 0) return ''
@@ -178,14 +174,31 @@ function Hint({ icon, children }) {
 export default function Wizard() {
   const [currentStep, setCurrentStep]   = useState(0)
   const [formData, setFormData]         = useState({
-    /* ── PATCH: replaced land_size with terrain_width + terrain_depth + wilaya ── */
     terrain_width: '',
     terrain_depth: '',
     wilaya:        '',
-    /* ── unchanged ── */
+    street_orientation: 'N',
+    slope_category: 'flat',
+    soil_category: 'compact',
     budget:      '',
+    budget_includes_land: false,
+    budget_includes_architect: false,
+    budget_includes_admin: false,
+    budget_includes_furniture: false,
     floors:      null,
+    future_floors: 0,
+    roof_type: 'terrasse_plate',
     family_size: '',
+    generations: 1,
+    independent_generations: false,
+    has_car: true,
+    car_count: 1,
+    guest_frequency: 'HIGH',
+    finish_level: 'standard',
+    vrd_aep: true,
+    vrd_elec: true,
+    vrd_gaz: true,
+    vrd_assainissement: true,
   })
   const [errors, setErrors]             = useState({})
   const [status, setStatus]             = useState(null)
@@ -197,12 +210,12 @@ export default function Wizard() {
     setErrors(prev => { const next = { ...prev }; delete next[field]; return next })
   }, [])
 
-  /* ── validateStep — case 0 updated for new terrain fields ── */
+  /* ── validateStep — validates all fields per step ── */
   const validateStep = useCallback((stepIndex) => {
     const stepErrors = {}
     switch (stepIndex) {
 
-      /* PATCH — Step 0 now validates width + depth + wilaya */
+      /* Step 0 validation: terrain dimensions + wilaya + new terrain fields */
       case 0: {
         const w = parseFloat2(formData.terrain_width)
         const d = parseFloat2(formData.terrain_depth)
@@ -224,10 +237,16 @@ export default function Wizard() {
         if (!formData.wilaya)
           stepErrors.wilaya = VALIDATION.wilaya.messages.required
 
+        if (!formData.street_orientation)
+          stepErrors.street_orientation = "Sélectionnez l'orientation de la rue"
+        if (!formData.slope_category)
+          stepErrors.slope_category = "Sélectionnez l'état du terrain"
+        if (!formData.soil_category)
+          stepErrors.soil_category = "Sélectionnez le type de sol"
+
         break
       }
 
-      /* Steps 1–3: unchanged */
       case 1: {
         const val = typeof formData.budget === 'string'
           ? parseFormattedNumber(formData.budget)
@@ -249,6 +268,17 @@ export default function Wizard() {
         if (!val) stepErrors.family_size = VALIDATION.family_size.messages.required
         else if (val < VALIDATION.family_size.min) stepErrors.family_size = VALIDATION.family_size.messages.min
         else if (val > VALIDATION.family_size.max) stepErrors.family_size = VALIDATION.family_size.messages.max
+        if (!formData.guest_frequency)
+          stepErrors.guest_frequency = "Sélectionnez la fréquence des invités"
+        if (formData.has_car === null)
+          stepErrors.has_car = "Indiquez si vous avez un véhicule"
+        if (!formData.generations)
+          stepErrors.generations = "Sélectionnez le nombre de générations"
+        break
+      }
+      case 4: {
+        if (!formData.finish_level)
+          stepErrors.finish_level = "Sélectionnez le niveau de finitions"
         break
       }
     }
@@ -267,19 +297,50 @@ export default function Wizard() {
 
   const goToStep = useCallback((step) => { setCurrentStep(step); setErrors({}) }, [])
 
-  /* ── PATCH: payload now sends terrain_width + terrain_depth + wilaya ── */
-  const buildPayload = useCallback(() => ({
-    terrain_width: parseFloat2(formData.terrain_width),
-    terrain_depth: parseFloat2(formData.terrain_depth),
-    wilaya:        formData.wilaya,
-    budget:      typeof formData.budget === 'string'
+  /* Compute the net construction budget after deducting scope items */
+  const computeConstructionBudget = useCallback(() => {
+    const raw = typeof formData.budget === 'string'
       ? parseFormattedNumber(formData.budget)
-      : formData.budget,
-    floors:      formData.floors,
-    family_size: typeof formData.family_size === 'string'
-      ? parseFormattedNumber(formData.family_size)
-      : formData.family_size,
-  }), [formData])
+      : formData.budget
+    if (!raw) return 0
+    let deduction = 0
+    if (formData.budget_includes_land)      deduction += raw * 0.40
+    if (formData.budget_includes_architect) deduction += raw * 0.03
+    if (formData.budget_includes_admin)     deduction += raw * 0.03
+    if (formData.budget_includes_furniture) deduction += raw * 0.08
+    return Math.max(raw - deduction, 0)
+  }, [formData])
+
+  /* Payload builds complete input object for POST /api/v1/generate */
+  const buildPayload = useCallback(() => ({
+    terrain_width:       parseFloat2(formData.terrain_width),
+    terrain_depth:       parseFloat2(formData.terrain_depth),
+    wilaya:              formData.wilaya,
+    street_orientation:  formData.street_orientation || 'N',
+    slope_category:      formData.slope_category     || 'flat',
+    soil_category:       formData.soil_category      || 'compact',
+    vrd_aep:             formData.vrd_aep,
+    vrd_elec:            formData.vrd_elec,
+    vrd_gaz:             formData.vrd_gaz,
+    vrd_assainissement:  formData.vrd_assainissement,
+    budget:              computeConstructionBudget(),
+    budget_includes_land:      formData.budget_includes_land,
+    budget_includes_architect: formData.budget_includes_architect,
+    budget_includes_admin:     formData.budget_includes_admin,
+    budget_includes_furniture: formData.budget_includes_furniture,
+    floors:              formData.floors,
+    future_floors:       formData.future_floors ?? 0,
+    roof_type:           formData.roof_type          || 'terrasse_plate',
+    family_size:         typeof formData.family_size === 'string'
+                           ? parseFormattedNumber(formData.family_size)
+                           : formData.family_size,
+    generations:         formData.generations        ?? 1,
+    independent_generations: formData.independent_generations ?? false,
+    guest_frequency:     formData.guest_frequency    || 'MEDIUM',
+    has_car:             formData.has_car             ?? true,
+    car_count:           formData.car_count           ?? 1,
+    finish_level:        formData.finish_level        || 'standard',
+  }), [formData, computeConstructionBudget])
 
   /* ── handleSubmit: unchanged ── */
   const handleSubmit = useCallback(async () => {
@@ -298,7 +359,36 @@ export default function Wizard() {
       })
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.message || `Erreur serveur (${response.status})`)
+
+        if (response.status === 422 && errorData.errors?.length > 0) {
+          const fieldMessages = {}
+          errorData.errors.forEach(err => {
+            const fieldLabel = {
+              finish_level:        'Niveau de finitions',
+              slope_category:      'État du terrain',
+              soil_category:       'Type de sol',
+              street_orientation:  'Orientation de la rue',
+              guest_frequency:     'Fréquence des invités',
+              has_car:             'Véhicule',
+              generations:         'Nombre de générations',
+              roof_type:           'Type de toiture',
+              terrain_width:       'Largeur du terrain',
+              terrain_depth:       'Profondeur du terrain',
+              wilaya:              'Wilaya',
+              budget:              'Budget',
+              floors:              'Étages',
+              family_size:         'Taille de la famille',
+            }[err.field] || err.field
+            fieldMessages[err.field] = `${fieldLabel}: ${err.message}`
+          })
+          setErrors(fieldMessages)
+          setStatus('error')
+          setErrorMessage(`${errorData.errors.length} champ(s) invalide(s). Vérifiez le formulaire.`)
+        } else {
+          setStatus('error')
+          setErrorMessage(errorData.message || 'Une erreur est survenue. Veuillez réessayer.')
+        }
+        return
       }
       const result = await response.json()
       setPlanData(result.data)
@@ -317,15 +407,33 @@ export default function Wizard() {
     }
   }, [buildPayload])
 
-  /* ── PATCH: reset includes new fields ── */
   const startNewProject = useCallback(() => {
     setFormData({
       terrain_width: '',
       terrain_depth: '',
       wilaya:        '',
-      budget:        '',
-      floors:        null,
-      family_size:   '',
+      street_orientation: 'N',
+      slope_category: 'flat',
+      soil_category: 'compact',
+      budget:      '',
+      budget_includes_land: false,
+      budget_includes_architect: false,
+      budget_includes_admin: false,
+      budget_includes_furniture: false,
+      floors:      null,
+      future_floors: 0,
+      roof_type: 'terrasse_plate',
+      family_size: '',
+      generations: 1,
+      independent_generations: false,
+      has_car: true,
+      car_count: 1,
+      guest_frequency: 'HIGH',
+      finish_level: 'standard',
+      vrd_aep: true,
+      vrd_elec: true,
+      vrd_gaz: true,
+      vrd_assainissement: true,
     })
     setCurrentStep(0)
     setStatus(null)
@@ -390,11 +498,8 @@ export default function Wizard() {
       {/* ── Main ── */}
       <main className="flex-1 px-5 pt-6 pb-8 flex flex-col max-w-lg mx-auto w-full">
 
-        {/* ═══════════════════════════════════════════════════
-            STEP 1 — Terrain   ← PATCHED
-            Replaced single land_size input with:
-              terrain_width | terrain_depth | wilaya
-            ═══════════════════════════════════════════════════ */}
+        {/* ═══ STEP 1 — Terrain ═══
+            Step 1 collects all terrain parameters */}
         {currentStep === 0 && (
           <section className="flex flex-col flex-1 animate-step-in" key="step-land">
             <div className="mb-6">
@@ -511,6 +616,64 @@ export default function Wizard() {
               </div>
             )}
 
+            {/* ── NEW v2.1: Orientation, Slope, Soil ── */}
+            <div className="mt-6 space-y-5">
+              <div>
+                <SectionLabel>Orientation de la façade (Rue)</SectionLabel>
+                <div className="grid grid-cols-4 gap-2">
+                  {['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'].map(dir => (
+                    <button
+                      key={dir}
+                      type="button"
+                      className={`p-2 rounded-lg border text-sm font-bold transition-colors ${
+                        formData.street_orientation === dir
+                          ? 'border-primary bg-primary/10 text-primary'
+                          : 'border-border text-muted hover:border-muted'
+                      }`}
+                      onClick={() => updateField('street_orientation', dir)}
+                    >
+                      {dir}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <SectionLabel>Inclinaison du terrain</SectionLabel>
+                <div className="flex gap-2">
+                  {[
+                    { val: 'flat', label: 'Plat' },
+                    { val: 'slight', label: 'Légère pente' },
+                    { val: 'steep', label: 'Forte pente' }
+                  ].map(opt => (
+                    <button
+                      key={opt.val} type="button"
+                      className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
+                        formData.slope_category === opt.val ? 'border-primary bg-primary/10 text-primary font-bold' : 'border-border text-muted'
+                      }`}
+                      onClick={() => updateField('slope_category', opt.val)}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <SectionLabel>Type de sol</SectionLabel>
+                <select
+                  className="input-field appearance-none"
+                  value={formData.soil_category}
+                  onChange={e => updateField('soil_category', e.target.value)}
+                >
+                  <option value="compact">Sol compact (Standard)</option>
+                  <option value="rocky">Rocheux (Solide)</option>
+                  <option value="soft">Meuble/Sablonneux (Fragile)</option>
+                  <option value="unknown">Inconnu (Sécurité max)</option>
+                </select>
+              </div>
+            </div>
+
             <Hint icon="straighten">
               Mesurez la façade sur rue (largeur) et la distance vers l'arrière (profondeur).
             </Hint>
@@ -572,6 +735,32 @@ export default function Wizard() {
               <Hint>Budget moyen : 10 000 000 à 30 000 000 DA</Hint>
             )}
 
+            {/* ── NEW v2.1: Budget Scope Checkboxes ── */}
+            <div className="mt-6">
+              <SectionLabel>Ce budget inclut-il déjà :</SectionLabel>
+              <div className="space-y-2 mt-2">
+                {[
+                  { field: 'budget_includes_land', label: "L'achat du terrain" },
+                  { field: 'budget_includes_architect', label: "Frais d'architecte et d'étude" },
+                  { field: 'budget_includes_admin', label: "Frais administratifs (Permis, etc.)" },
+                  { field: 'budget_includes_furniture', label: "Ameublement / Décoration" }
+                ].map(item => (
+                  <label key={item.field} className="flex items-center gap-3 p-2 rounded-lg border border-border hover:bg-card-alt cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      className="w-5 h-5 accent-primary rounded"
+                      checked={formData[item.field]}
+                      onChange={(e) => updateField(item.field, e.target.checked)}
+                    />
+                    <span className="text-sm text-text">{item.label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-xs text-muted mt-2">
+                Nous déduirons ces montants pour isoler le budget <strong className="text-text">exclusivement dédié à la construction</strong>.
+              </p>
+            </div>
+
             <div className="mt-auto pt-8 flex gap-3">
               <button className="btn-secondary px-5" onClick={goBack} type="button">
                 <span className="material-symbols-outlined">arrow_back</span>
@@ -584,19 +773,20 @@ export default function Wizard() {
           </section>
         )}
 
-        {/* ═══ STEP 3 — Floors (unchanged) ═══ */}
+        {/* ═══ STEP 3 — Volume ═══ */}
         {currentStep === 2 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-floors">
+          <section className="flex flex-col flex-1 animate-step-in" key="step-build">
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-text tracking-tight">
-                Type de construction
+                Volume de construction
               </h2>
               <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Combien d'étages souhaitez-vous ?
+                Définissez les étages et la toiture.
               </p>
             </div>
 
-            <div className="space-y-3">
+            <SectionLabel>Étages à construire immédiatement</SectionLabel>
+            <div className="space-y-3 mb-6">
               {FLOOR_OPTIONS.map((option) => (
                 <button
                   key={option.value}
@@ -627,6 +817,47 @@ export default function Wizard() {
             </div>
             <ErrorMsg message={errors.floors} />
 
+            <div className="mb-6">
+              <SectionLabel>Étages futurs prévus (Extension)</SectionLabel>
+              <div className="flex gap-2 mt-2">
+                {[0, 1, 2, 3, 4].map(num => (
+                  <button
+                    key={num} type="button"
+                    className={`flex-1 p-2 rounded-lg border text-sm font-bold transition-colors ${
+                      formData.future_floors === num ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:border-muted'
+                    }`}
+                    onClick={() => updateField('future_floors', num)}
+                  >
+                    +{num}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-muted mt-2">
+                Le rez-de-chaussée sera pré-dimensionné (poteaux, fondations) pour supporter ces étages.
+              </p>
+            </div>
+
+            <div className="mb-2">
+              <SectionLabel>Type de toiture</SectionLabel>
+              <div className="flex gap-2 mt-2">
+                {[
+                  { val: 'terrasse_plate', label: 'Terrasse Plate', icon: 'flatware' },
+                  { val: 'pitched', label: 'Inclinée (Tuiles)', icon: 'roofing' }
+                ].map(opt => (
+                  <button
+                    key={opt.val} type="button"
+                    className={`flex-1 p-3 flex flex-col items-center gap-1 rounded-lg border text-sm font-bold transition-colors ${
+                      formData.roof_type === opt.val ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:border-muted'
+                    }`}
+                    onClick={() => updateField('roof_type', opt.val)}
+                  >
+                    <span className="material-symbols-outlined">{opt.icon}</span>
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-auto pt-8 flex gap-3">
               <button className="btn-secondary px-5" onClick={goBack} type="button">
                 <span className="material-symbols-outlined">arrow_back</span>
@@ -639,35 +870,91 @@ export default function Wizard() {
           </section>
         )}
 
-        {/* ═══ STEP 4 — Family Size (unchanged) ═══ */}
+        {/* ═══ STEP 4 — Famille ═══ */}
         {currentStep === 3 && (
           <section className="flex flex-col flex-1 animate-step-in" key="step-family">
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-text tracking-tight">
-                Taille de la famille
+                Famille & Style de vie
               </h2>
               <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Combien de personnes vivront dans cette maison ?
+                Afin d'optimiser les espaces de vie et la privacité.
               </p>
             </div>
 
-            <SectionLabel>Nombre de membres</SectionLabel>
-            <input
-              id="family_size"
-              className={`input-field ${errors.family_size ? 'has-error' : ''}`}
-              type="text"
-              inputMode="numeric"
-              placeholder="Ex: 5"
-              value={formData.family_size}
-              onChange={(e) => updateField('family_size', e.target.value.replace(/\D/g, ''))}
-              onKeyDown={(e) => e.key === 'Enter' && goNext()}
-              autoFocus
-            />
-            <ErrorMsg message={errors.family_size} />
+            <div className="mb-4">
+              <SectionLabel>Nombre de membres</SectionLabel>
+              <input
+                id="family_size"
+                className={`input-field ${errors.family_size ? 'has-error' : ''}`}
+                type="text"
+                inputMode="numeric"
+                placeholder="Ex: 5"
+                value={formData.family_size}
+                onChange={(e) => updateField('family_size', e.target.value.replace(/\D/g, ''))}
+                autoFocus
+              />
+              <ErrorMsg message={errors.family_size} />
+            </div>
 
-            {!errors.family_size && (
-              <Hint>Incluez tous les membres : parents, enfants, grands-parents</Hint>
-            )}
+            <div className="mb-4">
+              <SectionLabel>Générations sous le même toit</SectionLabel>
+              <div className="flex gap-2">
+                {[1, 2, 3].map(num => (
+                  <button
+                    key={num} type="button"
+                    className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
+                      formData.generations === num ? 'border-primary bg-primary/10 text-primary font-bold' : 'border-border text-muted hover:border-muted'
+                    }`}
+                    onClick={() => updateField('generations', num)}
+                  >
+                    {num} {num === 1 ? 'Génération' : 'Générations'}
+                  </button>
+                ))}
+              </div>
+              {formData.generations > 1 && (
+                <label className="flex items-center gap-2 mt-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="w-5 h-5 accent-primary rounded"
+                    checked={formData.independent_generations}
+                    onChange={(e) => updateField('independent_generations', e.target.checked)}
+                  />
+                  <span className="text-sm text-text">Entrée et cuisine indépendantes pour les parents/grands-parents</span>
+                </label>
+              )}
+            </div>
+
+            <div className="mb-4">
+              <SectionLabel>Nombre de véhicules (Garage)</SectionLabel>
+              <div className="flex gap-2">
+                {[0, 1, 2, 3].map(num => (
+                  <button
+                    key={num} type="button"
+                    className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
+                      formData.car_count === num ? 'border-primary bg-primary/10 text-primary font-bold' : 'border-border text-muted hover:border-muted'
+                    }`}
+                    onClick={() => updateField('car_count', num)}
+                  >
+                    {num === 0 ? 'Aucun' : num}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-2">
+              <SectionLabel>Fréquence de réception d'invités (Majlis)</SectionLabel>
+              <select
+                className="input-field appearance-none"
+                value={formData.guest_frequency}
+                onChange={e => updateField('guest_frequency', e.target.value)}
+              >
+                <option value="HIGH">Fréquente (Grand Majlis requis)</option>
+                <option value="MEDIUM">Moyenne (Majlis standard)</option>
+                <option value="LOW">Occasionnelle (Petit espace)</option>
+                <option value="NEVER">Jamais (Pas de salon séparé)</option>
+              </select>
+            </div>
 
             <div className="mt-auto pt-8 flex gap-3">
               <button className="btn-secondary px-5" onClick={goBack} type="button">
@@ -681,11 +968,76 @@ export default function Wizard() {
           </section>
         )}
 
-        {/* ═══════════════════════════════════════════════════
-            STEP 5 — Summary   ← PATCHED
-            Replaced "Terrain: X m²" with width + depth + wilaya
-            ═══════════════════════════════════════════════════ */}
+        {/* ═══ STEP 5 — Finitions & VRD ═══ */}
         {currentStep === 4 && (
+          <section className="flex flex-col flex-1 animate-step-in" key="step-finishes">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-text tracking-tight">
+                Finitions & Raccordements
+              </h2>
+              <p className="text-sm text-muted mt-1.5 leading-relaxed">
+                Précisez le niveau de finition et la viabilisation du terrain.
+              </p>
+            </div>
+
+            <div className="mb-6">
+              <SectionLabel>Niveau de finition souhaité</SectionLabel>
+              <div className="space-y-2 mt-2">
+                {[
+                  { val: 'economy', label: 'Économique', desc: 'Matériaux locaux standards' },
+                  { val: 'standard', label: 'Standard', desc: 'Bon rapport qualité/prix' },
+                  { val: 'premium', label: 'Premium', desc: 'Matériaux d\'importation, domotique' }
+                ].map(opt => (
+                  <button
+                    key={opt.val} type="button"
+                    className={`w-full p-3 rounded-lg border text-left flex flex-col transition-colors ${
+                      formData.finish_level === opt.val ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:border-muted'
+                    }`}
+                    onClick={() => updateField('finish_level', opt.val)}
+                  >
+                    <span className="text-sm font-bold">{opt.label}</span>
+                    <span className="text-xs opacity-80">{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-2">
+              <SectionLabel>Viabilisation existante (Réseaux urbains)</SectionLabel>
+              <div className="grid grid-cols-2 gap-3 mt-2">
+                {[
+                  { field: 'vrd_aep', label: 'Eau Potable' },
+                  { field: 'vrd_elec', label: 'Électricité' },
+                  { field: 'vrd_gaz', label: 'Gaz de ville' },
+                  { field: 'vrd_assainissement', label: 'Égouts' }
+                ].map(item => (
+                  <label key={item.field} className="flex items-center gap-2 p-2 rounded-lg border border-border hover:bg-card-alt cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      className="w-5 h-5 accent-primary rounded"
+                      checked={formData[item.field]}
+                      onChange={(e) => updateField(item.field, e.target.checked)}
+                    />
+                    <span className="text-sm text-text">{item.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-auto pt-8 flex gap-3">
+              <button className="btn-secondary px-5" onClick={goBack} type="button">
+                <span className="material-symbols-outlined">arrow_back</span>
+              </button>
+              <button className="btn-primary flex-1" onClick={goNext} type="button">
+                Continuer
+                <span className="material-symbols-outlined text-xl">arrow_forward</span>
+              </button>
+            </div>
+          </section>
+        )}
+
+        {/* ═══ STEP 6 — Summary ═══ */}
+        {currentStep === 5 && (
           <section className="flex flex-col flex-1 animate-step-in" key="step-summary">
             <div className="mb-6">
               <h2 className="text-2xl font-bold text-text tracking-tight">
@@ -698,7 +1050,7 @@ export default function Wizard() {
 
             <div className="space-y-3">
 
-              {/* Terrain — PATCHED */}
+              {/* Terrain */}
               <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-start">
                 <div>
                   <div className="text-[10px] text-muted uppercase tracking-wider font-medium">
@@ -759,6 +1111,37 @@ export default function Wizard() {
                 </button>
               </div>
 
+              {/* Additional details */}
+              <div className="bg-card border border-border rounded-xl p-4">
+                <div className="text-[10px] text-muted uppercase tracking-wider font-medium mb-3">Détails supplémentaires</div>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted">Orientation rue</span>
+                    <span className="text-text font-medium">{formData.street_orientation || '—'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted">Pente terrain</span>
+                    <span className="text-text font-medium">{{flat:'Plat', slight:'Légère', steep:'Forte'}[formData.slope_category] || '—'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted">Type de sol</span>
+                    <span className="text-text font-medium">{{rocky:'Rocheux', compact:'Compact', soft:'Meuble', unknown:'Inconnu'}[formData.soil_category] || '—'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted">Toiture</span>
+                    <span className="text-text font-medium">{{terrasse_plate:'Terrasse plate', pitched:'En pente'}[formData.roof_type] || '—'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted">Finitions</span>
+                    <span className="text-text font-medium">{{economy:'Économique', standard:'Moyen standing', premium:'Haut standing'}[formData.finish_level] || '—'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted">Invités</span>
+                    <span className="text-text font-medium">{{NEVER:'Jamais', LOW:'Rarement', MEDIUM:'Régulièrement', HIGH:'Souvent'}[formData.guest_frequency] || '—'}</span>
+                  </div>
+                </div>
+              </div>
+
             </div>
 
             <div className="mt-auto pt-8 flex gap-3">
@@ -807,7 +1190,7 @@ export default function Wizard() {
                 <span className="material-symbols-outlined text-danger" style={{ fontSize: '48px' }}>error</span>
               </div>
               <h3 className="text-lg font-bold text-danger mb-2">Erreur de génération</h3>
-              <p className="text-sm text-muted mb-6">{errorMessage}</p>
+              <p className="text-sm text-muted mb-6 whitespace-pre-line text-left">{errorMessage}</p>
               <button className="btn-secondary" onClick={dismissError}>Réessayer</button>
             </div>
           )}
