@@ -1,13 +1,27 @@
+import { useState, useEffect } from 'react'
+import LandingPage from './components/LandingPage'
 import Wizard from './components/Wizard'
 
-/*
- * App — Root shell for BINAA
- * Clean mobile-first layout. All logic lives in <Wizard />.
- */
 function App() {
+  const [currentPage, setCurrentPage] = useState('landing')
+  const [lang, setLang] = useState('fr')
+
+  // Apply RTL direction based on language
+  useEffect(() => {
+    document.documentElement.dir = lang === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.lang = lang;
+  }, [lang]);
+
+  // Page routing
+  const navigate = (page) => {
+    window.scrollTo(0, 0);
+    setCurrentPage(page);
+  }
+
   return (
-    <div className="min-h-dvh bg-bg flex flex-col">
-      <Wizard />
+    <div style={{ background: 'var(--bg-base)', minHeight: '100dvh' }}>
+      {currentPage === 'landing' && <LandingPage onNavigate={navigate} lang={lang} onLangChange={setLang} />}
+      {currentPage === 'wizard' && <Wizard onNavigate={navigate} lang={lang} onLangChange={setLang} />}
     </div>
   )
 }

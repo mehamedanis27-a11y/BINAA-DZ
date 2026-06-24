@@ -1,15 +1,14 @@
 """
-BINAA — Pydantic Models v2.0
+BINAA — Pydantic Models v3.0  (Oran launch)
 Request / Response contracts for the generation pipeline.
 
-BREAKING CHANGES FROM v1:
-  - GenerateRequest: added terrain_width, terrain_depth, wilaya,
-    street_orientation, generations, has_car, future_floors
-  - RoomOutput: added x, y, width, height (spatial coordinates)
-  - PlanSummary: added seismic_zone, climate_zone, effective_width,
-    effective_depth — derived server-side from wilaya + terrain
-  - New: ValidationIssue, ValidationReport
-  - New: StructuralGridOutput (exposed in response for renderer)
+BREAKING CHANGES FROM v2:
+  - GenerateRequest: terrain_width/terrain_depth replaced by built_width_m/built_depth_m,
+    street_orientation and future_floors removed entirely.
+  - SiteAnalysisOutput: setback fields, solar_priority_orientation and
+    dominant_summer_wind removed; effective_area_m2 renamed built_area_m2.
+  - CostEstimateOutput: simplified to cost_min/max with flat breakdown dict.
+  - CostBreakdownLine model removed.
 """
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -20,7 +19,6 @@ from typing import Literal, Optional
 #  CONSTANTS — Valid input values
 # ─────────────────────────────────────────────────────────────
 
-VALID_ORIENTATIONS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
 
 VALID_WILAYAS = {
     "01", "02", "03", "04", "05", "06", "07", "08", "09", "10",
@@ -94,16 +92,7 @@ WILAYA_CLIMATE_ZONE = {
     "57": "ARID",     "58": "SAHARAN",
 }
 
-# Setbacks in meters (absolute distances) by wilaya urban density context
-# Simplified into two tiers; production system needs per-wilaya POS data
-WILAYA_SETBACKS = {
-    # Dense urban wilayas (smaller setbacks allowed by POS)
-    "dense": {"front": 3.0, "left": 1.5, "right": 1.5, "rear": 2.0},
-    # Standard / suburban
-    "standard": {"front": 4.0, "left": 2.0, "right": 2.0, "rear": 3.0},
-}
 
-DENSE_URBAN_WILAYAS = {"16", "31", "25", "23", "13", "09", "35", "42", "21", "06"}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -112,28 +101,23 @@ DENSE_URBAN_WILAYAS = {"16", "31", "25", "23", "13", "09", "35", "42", "21", "06
 
 class GenerateRequest(BaseModel):
     """
-    Input payload for POST /generate — v2.
+    Input payload for POST /generate — v3 (Oran launch).
 
-    Key change from v1: terrain is described by width × depth (not a
-    single area float), and wilaya drives seismic/climate/cost logic.
-    All fields have French error messages for frontend consistency.
+    Changement depuis v2: terrain_width/terrain_depth remplacés par
+    built_width_m / built_depth_m (emprise bâtiment sans retraits).
+    street_orientation et future_floors supprimés.
     """
 
-    # ── SITE ─────────────────────────────────────────────
-    terrain_width: float = Field(
-        ...,
-        description="Largeur du terrain en mètres (façade sur rue)",
-        json_schema_extra={"example": 10.0}
+    # ── EMPRISE BÂTIMENT ─────────────────────────────────
+    built_width_m: float = Field(
+        ..., ge=4.0,
+        description="Largeur de l'emprise bâtiment en mètres (sans retraits)",
+        json_schema_extra={"example": 8.0}
     )
-    terrain_depth: float = Field(
-        ...,
-        description="Profondeur du terrain en mètres (perpendiculaire à la rue)",
-        json_schema_extra={"example": 18.0}
-    )
-    street_orientation: str = Field(
-        ...,
-        description="Orientation de la façade sur rue (N / NE / E / SE / S / SW / W / NW)",
-        json_schema_extra={"example": "N"}
+    built_depth_m: float = Field(
+        ..., ge=6.0,
+        description="Profondeur de l'emprise bâtiment en mètres (sans retraits)",
+        json_schema_extra={"example": 14.0}
     )
     wilaya: str = Field(
         ...,
@@ -167,10 +151,6 @@ class GenerateRequest(BaseModel):
         description="Étages à construire maintenant (0=R+0, 1=R+1, 2=R+2)",
         json_schema_extra={"example": 1}
     )
-    future_floors: int = Field(
-        ..., ge=0, le=4,
-        description="Étages prévus ultérieurement (structure pré-dimensionnée)"
-    )
 
     # ── BUDGET ───────────────────────────────────────────
     budget: float = Field(
@@ -179,7 +159,7 @@ class GenerateRequest(BaseModel):
         json_schema_extra={"example": 18_000_000}
     )
 
-    # ── NEW v2.1 ────────────────────────────────────────────────
+    # ── OPTIONS ──────────────────────────────────────────
     slope_category: Literal["flat", "slight", "steep"] = Field(
         ..., description="Inclinaison du terrain"
     )
@@ -218,31 +198,19 @@ class GenerateRequest(BaseModel):
 
     # ── VALIDATORS ───────────────────────────────────────
 
-    @field_validator("terrain_width")
+    @field_validator("built_width_m")
     @classmethod
-    def validate_width(cls, v):
-        if v < 5.0:
-            raise ValueError("La largeur du terrain doit être d'au moins 5 m")
-        if v > 200.0:
-            raise ValueError("La largeur du terrain ne peut pas dépasser 200 m")
+    def validate_built_width(cls, v):
+        if v > 100.0:
+            raise ValueError("La largeur de l'emprise ne peut pas dépasser 100 m")
         return round(v, 2)
 
-    @field_validator("terrain_depth")
+    @field_validator("built_depth_m")
     @classmethod
-    def validate_depth(cls, v):
-        if v < 8.0:
-            raise ValueError("La profondeur du terrain doit être d'au moins 8 m")
-        if v > 200.0:
-            raise ValueError("La profondeur ne peut pas dépasser 200 m")
+    def validate_built_depth(cls, v):
+        if v > 100.0:
+            raise ValueError("La profondeur de l'emprise ne peut pas dépasser 100 m")
         return round(v, 2)
-
-    @field_validator("street_orientation")
-    @classmethod
-    def validate_orientation(cls, v):
-        allowed = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
-        if v.upper() not in allowed:
-            raise ValueError(f"street_orientation doit être: {', '.join(sorted(allowed))}")
-        return v.upper()
 
     @field_validator("wilaya")
     @classmethod
@@ -283,13 +251,6 @@ class GenerateRequest(BaseModel):
             raise ValueError("Étages actuels: 0 (R+0), 1 (R+1) ou 2 (R+2)")
         return v
 
-    @field_validator("future_floors")
-    @classmethod
-    def validate_future_floors(cls, v):
-        if v < 0 or v > 3:
-            raise ValueError("Étages futurs: entre 0 et 3")
-        return v
-
     @field_validator("budget")
     @classmethod
     def validate_budget(cls, v):
@@ -301,23 +262,18 @@ class GenerateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_cross_fields(self):
-        """Cross-field validation that requires multiple fields."""
-        # future_floors must be >= floors (can't plan fewer floors than you're building)
-        if self.future_floors > 0 and self.future_floors < self.floors:
+        """Cross-field validation: emprise minimale."""
+        built_area = self.built_width_m * self.built_depth_m
+        if built_area < 30:
             raise ValueError(
-                "Les étages futurs prévus ne peuvent pas être inférieurs aux étages actuels"
-            )
-        # Warn if narrow plot — not a hard error, handled in engine with warnings
-        terrain_area = self.terrain_width * self.terrain_depth
-        if terrain_area < 60:
-            raise ValueError(
-                f"Terrain trop petit ({terrain_area:.0f} m²). Minimum 60 m² requis."
+                f"Emprise trop petite ({built_area:.0f} m²). Minimum 30 m² requis."
             )
         return self
 
     @property
-    def terrain_area(self) -> float:
-        return round(self.terrain_width * self.terrain_depth, 1)
+    def built_area(self) -> float:
+        """Surface d'emprise au sol (m²)."""
+        return round(self.built_width_m * self.built_depth_m, 1)
 
     @property
     def seismic_zone(self) -> str:
@@ -330,11 +286,6 @@ class GenerateRequest(BaseModel):
     @property
     def wilaya_name(self) -> str:
         return WILAYA_NAMES.get(self.wilaya, f"Wilaya {self.wilaya}")
-
-    @property
-    def setbacks(self) -> dict:
-        tier = "dense" if self.wilaya in DENSE_URBAN_WILAYAS else "standard"
-        return WILAYA_SETBACKS[tier]
 
 
 # ─────────────────────────────────────────────────────────────
@@ -381,6 +332,14 @@ class DoorOutput(BaseModel):
     is_main_entrance: bool = False
 
 
+class WindowOutput(BaseModel):
+    room_type: str
+    wall_direction: str  # N/S/E/W
+    position_ratio: float  # 0.0=début, 0.5=milieu, 1.0=fin du mur
+    width_m: float  # largeur fenêtre en mètres
+    height_m: float  # hauteur fenêtre en mètres
+
+
 class ColumnOutput(BaseModel):
     """A structural column at a grid intersection."""
     x: float         # center x of column
@@ -391,14 +350,48 @@ class ColumnOutput(BaseModel):
 
 class StructuralGridOutput(BaseModel):
     """Structural grid for renderer — exposes column positions and grid lines."""
-    x_lines: list[float]         # x-coordinates of grid lines in meters
-    y_lines: list[float]         # y-coordinates of grid lines in meters
-    columns: list[ColumnOutput]  # all column positions
-    column_section_m: float      # column side dimension (square section)
-    beam_depth_m: float          # beam depth (span/10)
-    slab_thickness_m: float      # slab thickness
-    max_span_m: float            # maximum span in this grid
-    seismic_zone: str
+    column_axes_x: list[float]
+    column_axes_y: list[float]
+    column_section: str
+    max_span_m: float
+    slab_thickness_cm: int
+    grid_spec: str
+
+    @property
+    def num_bays_x(self) -> int:
+        return len(self.column_axes_x) - 1
+
+    @property
+    def num_bays_y(self) -> int:
+        return len(self.column_axes_y) - 1
+
+    def get_bay_rect(self, bay_x: int, bay_y: int) -> tuple[float, float, float, float]:
+        x_min = self.column_axes_x[bay_x]
+        y_min = self.column_axes_y[bay_y]
+        width = self.column_axes_x[bay_x + 1] - x_min
+        height = self.column_axes_y[bay_y + 1] - y_min
+        return x_min, y_min, width, height
+
+    @property
+    def x_spans(self) -> list[float]:
+        return [round(self.column_axes_x[i+1] - self.column_axes_x[i], 3)
+                for i in range(len(self.column_axes_x) - 1)]
+
+    @property
+    def y_spans(self) -> list[float]:
+        return [round(self.column_axes_y[i+1] - self.column_axes_y[i], 3)
+                for i in range(len(self.column_axes_y) - 1)]
+
+    @property
+    def column_section_val(self) -> float:
+        try:
+            parts = self.column_section.split("×")
+            if len(parts) >= 1:
+                val = float(parts[0].strip().replace("cm", ""))
+                return val / 100.0
+        except Exception:
+            pass
+        return 0.30
 
 
 class FloorOutput(BaseModel):
@@ -407,46 +400,34 @@ class FloorOutput(BaseModel):
     floor_label: str
     rooms: list[RoomOutput]
     doors: list[DoorOutput] = []
+    windows: list[WindowOutput] = []
     total_room_area_m2: float
     circulation_area_m2: float
     total_floor_area_m2: float
-    effective_width_m: float
-    effective_depth_m: float
 
 
 class SiteAnalysisOutput(BaseModel):
-    """Site analysis results — derived from inputs, not provided by user."""
-    terrain_width_m: float
-    terrain_depth_m: float
-    terrain_area_m2: float
-    setbacks: dict                    # {front, left, right, rear} in meters
-    effective_width_m: float          # terrain_width - left_setback - right_setback
-    effective_depth_m: float          # terrain_depth - front_setback - rear_setback
-    effective_area_m2: float          # effective_width × effective_depth
-    setback_area_m2: float            # area lost to setbacks
-    setback_loss_percent: float       # percentage of terrain lost to setbacks
+    """Site analysis results — v3 (Oran launch). Emprise directe, sans retraits."""
+    built_width_m: float = Field(..., description="Largeur emprise bâtiment (echo input)")
+    built_depth_m: float = Field(..., description="Profondeur emprise bâtiment (echo input)")
+    built_area_m2: float = Field(..., description="Surface emprise au sol = built_width × built_depth")
+    total_built_area_m2: float = Field(..., description="Surface totale construite tous étages")
     wilaya: str
     wilaya_name: str
-    seismic_zone: str                 # LOW / MEDIUM / HIGH
-    climate_zone: str                 # COASTAL / HIGHLAND / ARID / SAHARAN
-    street_orientation: str
-    solar_priority_orientation: str   # best orientation for habitable rooms
-    dominant_summer_wind: str         # dominant wind direction for this climate
+    seismic_zone: str = Field(..., description="Zone sismique: LOW / MEDIUM / HIGH (info uniquement)")
+    climate_zone: str = Field(..., description="Zone climatique: COASTAL / HIGHLAND / ARID / SAHARAN")
 
 
 class PlanSummary(BaseModel):
-    """High-level plan metrics — expanded in v2."""
-    terrain_area_m2: float
-    effective_footprint_m2: float     # actual buildable after real setbacks
-    total_built_area_m2: float
-    setback_loss_percent: float
+    """High-level plan metrics — v3 (Oran launch)."""
+    built_area_m2: float = Field(..., description="Surface emprise au sol")
+    total_built_area_m2: float = Field(..., description="Surface totale construite tous étages")
     floor_count: int
     bedroom_count: int
     bathroom_count: int
     seismic_zone: str
     climate_zone: str
     wilaya_name: str
-    structural_pre_commitment: bool   # True if future_floors > floors
 
 
 class ValidationIssue(BaseModel):
@@ -470,34 +451,48 @@ class ValidationReport(BaseModel):
     passed_checks: list[str] = []     # checks that passed — for user confidence
 
 
-class CostBreakdownLine(BaseModel):
-    """A single line in the cost breakdown."""
-    label_fr: str
-    area_m2: float = 0.0
-    rate_da_per_m2: int = 0
-    rate_unit: str = "m²"
-    amount_min: int
-    amount_max: int
-    note: str = ""
-
-
 class CostEstimateOutput(BaseModel):
-    """Realistic cost estimate — v2 with wilaya rates and contingency."""
-    estimated_min_da: int
-    estimated_max_da: int
-    cost_per_m2_min: int
-    cost_per_m2_max: int
-    total_built_m2: float
-    breakdown: list[CostBreakdownLine]
-    contingency_da: int               # 20% contingency — always shown explicitly
-    seismic_surcharge_da: int         # seismic structural premium
-    budget_status: str                # comfortable / sufficient / insufficient
-    budget_message: str
-    budget_gap_da: int                # 0 if sufficient, else shortfall
-    wilaya_name: str
-    seismic_zone: str
-    rates_note: str                   # e.g. "Taux Oran 2025-2026"
-    price_data_date: str = ""
+    """
+    Estimation de coût — v3 (Oran launch).
+    Simplifié: coût min/max avec 3 lignes de breakdown.
+    """
+    cost_min: float = Field(..., description="Coût minimum total (structure + finitions + imprévus)")
+    cost_max: float = Field(..., description="Coût maximum total (structure + finitions + imprévus)")
+    budget_status: str = Field(
+        ...,
+        description="Statut budget: comfortable / sufficient / tight / insufficient"
+    )
+    built_area_total_m2: float = Field(
+        ...,
+        description="Surface totale construite = built_width × built_depth × (floors+1)"
+    )
+    rate_min_per_m2: float = Field(..., description="Taux minimum utilisé (DA/m²)")
+    rate_max_per_m2: float = Field(..., description="Taux maximum utilisé (DA/m²)")
+    contingency_rate: float = Field(
+        default=0.20,
+        description="Taux d'imprévus appliqué (toujours 20%)"
+    )
+    pricing_last_updated: str = Field(
+        ...,
+        description="Date de dernière mise à jour des prix (ex: '2025-06')"
+    )
+    validation_source: str = Field(
+        default="",
+        description="Source de validation de la tarification (ex: 'Architecte agréé')"
+    )
+    currency: str = Field(
+        default="DZD",
+        description="Devise de l'estimation"
+    )
+    breakdown: dict = Field(
+        ...,
+        description=(
+            "Ventilation en 3 lignes: "
+            "structure_et_finitions {min, max}, "
+            "imprévus {min, max}, "
+            "total {min, max}"
+        )
+    )
 
 
 class MaterialItemOutput(BaseModel):
@@ -552,3 +547,5 @@ class ErrorResponse(BaseModel):
     status: Literal["error"] = "error"
     message: str
     errors: list[ErrorDetail] = []
+
+

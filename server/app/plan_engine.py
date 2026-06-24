@@ -29,9 +29,9 @@ from typing import Optional
 
 from .models import (
     RoomOutput, FloorOutput, DoorOutput, PlanSummary,
-    ValidationIssue,
+    ValidationIssue, StructuralGridOutput, WindowOutput,
 )
-from .structural_grid import StructuralGrid, get_max_room_dimensions
+from .structural_grid import get_max_room_dimensions
 
 
 # ─────────────────────────────────────────────────────────────
@@ -323,7 +323,7 @@ class GridCell:
         return (self.x + self.width / 2, self.y + self.height / 2)
 
 
-def _build_grid_cells(grid: StructuralGrid) -> list[GridCell]:
+def _build_grid_cells(grid: StructuralGridOutput) -> list[GridCell]:
     """Create cell objects for every structural bay."""
     cells = []
     for bx in range(grid.num_bays_x):
@@ -344,13 +344,19 @@ def _build_grid_cells(grid: StructuralGrid) -> list[GridCell]:
     return cells
 
 
+def _cells_share_wall(c1: GridCell, c2: GridCell) -> bool:
+    return abs(c1.bay_x - c2.bay_x) + abs(c1.bay_y - c2.bay_y) == 1
+
+
 def _score_cell(
     cell: GridCell,
     room_type: str,
     placed: dict,
-    grid: StructuralGrid,
+    grid: StructuralGridOutput,
     solar_priority: str,
     street_orientation: str,
+    floor_num: int = 0,
+    previous_floors_rooms: list[RoomOutput] = None,
 ) -> float:
     """
     Score a candidate cell for a given room type.
@@ -359,6 +365,34 @@ def _score_cell(
     """
     if cell.occupied:
         return -999999
+
+    # Règle 4: Proportion constraint
+    specs = ROOM_SPECS.get(room_type)
+    if specs and len(specs) >= 6:
+        max_ratio = specs[5]
+        cell_min = min(cell.width, cell.height)
+        cell_max = max(cell.width, cell.height)
+        if cell_min > 0:
+            ratio = cell_max / cell_min
+            if ratio > max_ratio:
+                return -999999
+
+    # Règle 7: Exterior wall requirements during placement
+    is_north = cell.bay_y == 0
+    is_south = cell.bay_y == grid.num_bays_y - 1
+    is_west = cell.bay_x == 0
+    is_east = cell.bay_x == grid.num_bays_x - 1
+    has_exterior = is_north or is_south or is_east or is_west
+    if room_type in ("cuisine", "salon_famille") or room_type.startswith("chambre_"):
+        if not has_exterior:
+            return -999999
+
+    # Règle 5: Staircase vertical alignment
+    if room_type == "escalier" and floor_num > 0 and previous_floors_rooms:
+        prev_esc = next((r for r in previous_floors_rooms if r.room_type == "escalier"), None)
+        if prev_esc:
+            if not (abs(cell.x - prev_esc.x) < 0.01 and abs(cell.y - prev_esc.y) < 0.01):
+                return -999999
 
     zone, privacy = ZONE_MAP.get(room_type, ("service", 4))
     num_y_bays = grid.num_bays_y
@@ -424,8 +458,8 @@ def _score_cell(
         zone_score += depth_fraction * 20
 
     # Salon hôtes: must be near vestibule
-    if room_type == "salon_hotes" and "vestibule" in placed:
-        vest_cell = placed["vestibule"]
+    if room_type == "salon_hotes" and placed.get("vestibule"):
+        vest_cell = placed["vestibule"][0]
         dist = abs(cell.bay_x - vest_cell.bay_x) + abs(cell.bay_y - vest_cell.bay_y)
         if dist > 2:
             zone_score -= dist * 15
@@ -433,10 +467,95 @@ def _score_cell(
             zone_score += 30
 
     # Kitchen: should be adjacent to salon famille
-    if room_type == "cuisine" and "salon_famille" in placed:
-        sf_cell = placed["salon_famille"]
+    if room_type == "cuisine" and placed.get("salon_famille"):
+        sf_cell = placed["salon_famille"][0]
         dist = abs(cell.bay_x - sf_cell.bay_x) + abs(cell.bay_y - sf_cell.bay_y)
         zone_score += max(0, 25 - dist * 10)
+
+    # Degagement: should be adjacent to escalier
+    if room_type == "degagement" and placed.get("escalier"):
+        esc_cells = placed["escalier"]
+        min_dist = min(abs(cell.bay_x - ec.bay_x) + abs(cell.bay_y - ec.bay_y) for ec in esc_cells)
+        if min_dist == 1:
+            zone_score += 40
+
+    # Circulation adjacency for non-circulation rooms
+    if zone in ("private", "public", "semi-public", "service"):
+        circ_cells = []
+        for k in ["degagement", "escalier", "vestibule"]:
+            if placed.get(k):
+                circ_cells.extend(placed[k])
+        if circ_cells:
+            min_dist = min(abs(cell.bay_x - cc.bay_x) + abs(cell.bay_y - cc.bay_y) for cc in circ_cells)
+            if min_dist == 1:
+                zone_score += 35
+
+    # ── Règle 2: Wet rooms clustering ─────────────────────────
+    wet_bonus = 0
+    if room_type == "cuisine" and placed.get("sdb_principale"):
+        if any(_cells_share_wall(cell, oc) for oc in placed["sdb_principale"]):
+            wet_bonus += 25
+    elif room_type == "sdb_principale" and placed.get("cuisine"):
+        if any(_cells_share_wall(cell, oc) for oc in placed["cuisine"]):
+            wet_bonus += 25
+
+    if room_type == "wc_separe" and placed.get("sdb_principale"):
+        if any(_cells_share_wall(cell, oc) for oc in placed["sdb_principale"]):
+            wet_bonus += 20
+    elif room_type == "sdb_principale" and placed.get("wc_separe"):
+        if any(_cells_share_wall(cell, oc) for oc in placed["wc_separe"]):
+            wet_bonus += 20
+
+    if room_type == "cuisine" and placed.get("wc_invites"):
+        if any(_cells_share_wall(cell, oc) for oc in placed["wc_invites"]):
+            wet_bonus += 15
+    elif room_type == "wc_invites" and placed.get("cuisine"):
+        if any(_cells_share_wall(cell, oc) for oc in placed["wc_invites"]):
+            wet_bonus += 15
+
+    # ── Règle 3: Bedroom clustering ───────────────────────────
+    bedroom_bonus = 0
+    if room_type.startswith("chambre_"):
+        placed_bedrooms = []
+        for k, v in placed.items():
+            if k.startswith("chambre_"):
+                placed_bedrooms.extend(v)
+        if placed_bedrooms:
+            if any(_cells_share_wall(cell, oc) for oc in placed_bedrooms):
+                bedroom_bonus += 30
+            else:
+                bedroom_bonus -= 40
+
+    # ── Règle 5: Staircase scoring rules ──────────────────────
+    stair_bonus = 0
+    if room_type == "escalier":
+        # +40 pts si placé dans la zone de transition public→privé (profondeur 40-60%)
+        if 0.40 <= depth_fraction <= 0.60:
+            stair_bonus += 40
+        # +30 pts si adjacent au dégagement
+        if placed.get("degagement"):
+            if any(_cells_share_wall(cell, dc) for dc in placed["degagement"]):
+                stair_bonus += 30
+
+    if room_type == "degagement" and placed.get("escalier"):
+        if any(_cells_share_wall(cell, ec) for ec in placed["escalier"]):
+            stair_bonus += 30
+
+    # -20 pts si éloigné de plus de 3m de toutes les chambres (sur l'étage supérieur)
+    if room_type.startswith("chambre_") and floor_num > 0 and placed.get("escalier"):
+        cell_cx = cell.x + cell.width / 2
+        cell_cy = cell.y + cell.height / 2
+        min_dist = 99999.0
+        for ec in placed["escalier"]:
+            ec_cx = ec.x + ec.width / 2
+            ec_cy = ec.y + ec.height / 2
+            dist = math.sqrt((cell_cx - ec_cx)**2 + (cell_cy - ec_cy)**2)
+            if dist < min_dist:
+                min_dist = dist
+        if min_dist > 3.0:
+            stair_bonus -= 20
+
+    zone_score += wet_bonus + bedroom_bonus + stair_bonus
 
     # ── Area fit score ────────────────────────────────────────
     specs = ROOM_SPECS.get(room_type)
@@ -454,10 +573,11 @@ def _score_cell(
 
 def place_rooms_on_grid(
     program_floor: list[tuple[str, float]],
-    grid: StructuralGrid,
+    grid: StructuralGridOutput,
     floor_num: int,
     solar_priority: str,
     street_orientation: str,
+    previous_floors_rooms: list[RoomOutput] = None,
 ) -> tuple[list[RoomOutput], list[DoorOutput], list[str]]:
     """
     Place rooms for one floor onto the structural grid.
@@ -466,7 +586,7 @@ def place_rooms_on_grid(
         (rooms, doors, warnings)
     """
     cells = _build_grid_cells(grid)
-    placed: dict[str, GridCell] = {}   # room_type → GridCell
+    placed: dict[str, list[GridCell]] = {}   # room_type → list[GridCell]
     unplaced: list[str] = []
     warnings: list[str] = []
 
@@ -474,8 +594,8 @@ def place_rooms_on_grid(
     PLACEMENT_ORDER = [
         "garage", "vestibule", "escalier", "salon_hotes", "wc_invites",
         "salon_famille", "cuisine", "degagement", "chambre_grandp",
-        "chambre_parents", "sdb_principale", "wc_separe",
-        "chambre_enfant", "sdb_enfants", "buanderie",
+        "chambre_parents", "chambre_enfant", "sdb_principale", "wc_separe",
+        "sdb_enfants", "buanderie",
     ]
     program_dict = dict(program_floor)
     sorted_rooms = sorted(
@@ -492,7 +612,8 @@ def place_rooms_on_grid(
             if cell.occupied:
                 continue
             score = _score_cell(
-                cell, room_type, placed, grid, solar_priority, street_orientation
+                cell, room_type, placed, grid, solar_priority, street_orientation,
+                floor_num=floor_num, previous_floors_rooms=previous_floors_rooms
             )
             if score > best_score:
                 best_score = score
@@ -509,14 +630,17 @@ def place_rooms_on_grid(
 
         best_cell.occupied = True
         best_cell.room_type = room_type
-        placed[room_type] = best_cell
+        if room_type not in placed:
+            placed[room_type] = []
+        placed[room_type].append(best_cell)
 
     # Build RoomOutput objects with coordinates
     rooms: list[RoomOutput] = []
+    placed_instances = {k: list(v) for k, v in placed.items()}
     for room_type, target_area in sorted_rooms:
         if room_type in unplaced:
             continue
-        cell = placed[room_type]
+        cell = placed_instances[room_type].pop(0)
         zone_name, privacy_lvl = ZONE_MAP.get(room_type, ("service", 4))
         label_fr, label_ar = LABELS.get(room_type, (room_type, room_type))
 
@@ -559,7 +683,7 @@ def place_rooms_on_grid(
     return rooms, doors, warnings
 
 
-def _generate_note(room_type: str, cell: GridCell, grid: StructuralGrid) -> str:
+def _generate_note(room_type: str, cell: GridCell, grid: StructuralGridOutput) -> str:
     """Generate a short architectural note for a room."""
     notes = {
         "vestibule": "Filtrage visuel — seuil d'entrée privé",
@@ -573,8 +697,8 @@ def _generate_note(room_type: str, cell: GridCell, grid: StructuralGrid) -> str:
 
 
 def _generate_doors(
-    placed: dict[str, GridCell],
-    grid: StructuralGrid,
+    placed: dict[str, list[GridCell]],
+    grid: StructuralGridOutput,
 ) -> list[DoorOutput]:
     """
     Generate door positions between adjacent placed rooms.
@@ -582,7 +706,10 @@ def _generate_doors(
     in exactly one axis).
     """
     doors = []
-    room_list = list(placed.items())
+    room_list = []
+    for rt, cells in placed.items():
+        for cell in cells:
+            room_list.append((rt, cell))
 
     for i, (rt_a, cell_a) in enumerate(room_list):
         for rt_b, cell_b in room_list[i+1:]:
@@ -648,6 +775,9 @@ NO_DOOR_PAIRS = {
     frozenset({"chambre_parents", "chambre_enfant"}),  # no bedroom-through-bedroom
     frozenset({"chambre_parents", "chambre_grandp"}),
     frozenset({"chambre_enfant", "chambre_enfant"}),
+    frozenset({"escalier", "chambre_parents"}),
+    frozenset({"escalier", "chambre_enfant"}),
+    frozenset({"escalier", "chambre_grandp"}),
 }
 
 def _no_door_between(rt_a: str, rt_b: str) -> bool:
@@ -668,7 +798,7 @@ def generate_plan(
     floors: int,
     future_floors: int,
     budget: float,
-    grid: StructuralGrid,
+    grid: StructuralGridOutput,
     solar_priority: str,
     street_orientation: str,
     wilaya_name: str,
@@ -706,6 +836,7 @@ def generate_plan(
 
     # ── Place rooms per floor ─────────────────────────────
     floor_outputs: list[FloorOutput] = []
+    all_placed_rooms: list[RoomOutput] = []
     total_bedroom_count = 0
     total_bathroom_count = 0
 
@@ -717,9 +848,11 @@ def generate_plan(
 
         rooms, doors, floor_warnings = place_rooms_on_grid(
             floor_program, grid, floor_num,
-            solar_priority, street_orientation
+            solar_priority, street_orientation,
+            previous_floors_rooms=all_placed_rooms
         )
         warnings.extend(floor_warnings)
+        all_placed_rooms.extend(rooms)
 
         # Area summary
         room_area = round(sum(r.area_m2 for r in rooms), 1)
@@ -735,11 +868,15 @@ def generate_plan(
             1 for r in rooms if "sdb" in r.room_type
         )
 
+        # Generate windows for this floor's rooms
+        floor_windows = _generate_windows_for_rooms(rooms)
+
         floor_outputs.append(FloorOutput(
             floor_number=floor_num,
             floor_label="RDC" if floor_num == 0 else f"R+{floor_num}",
             rooms=rooms,
             doors=doors,
+            windows=floor_windows,
             total_room_area_m2=room_area,
             circulation_area_m2=circ_area,
             total_floor_area_m2=floor_total,
@@ -751,25 +888,21 @@ def generate_plan(
     total_built = round(effective_width * effective_depth * total_floors, 1)
 
     summary = PlanSummary(
-        terrain_area_m2=0,  # filled in routes.py from site_analysis
-        effective_footprint_m2=round(effective_width * effective_depth, 1),
+        built_area_m2=round(effective_width * effective_depth, 1),
         total_built_area_m2=total_built,
-        setback_loss_percent=0,  # filled in routes.py
         floor_count=total_floors,
         bedroom_count=total_bedroom_count,
         bathroom_count=total_bathroom_count,
         seismic_zone=seismic_zone,
         climate_zone=climate_zone,
         wilaya_name=wilaya_name,
-        structural_pre_commitment=future_floors > floors,
     )
 
-    # ── Structural pre-commitment warning ─────────────────
     if future_floors > floors:
         warnings.append(
             f"⚙ Pré-dimensionnement R+{future_floors}: poteaux "
-            f"{int(grid.column_section*100)}×{int(grid.column_section*100)}cm, "
-            f"dalle {int(grid.slab_thickness*100)}cm, "
+            f"{grid.column_section}, "
+            f"dalle {grid.slab_thickness_cm}cm, "
             f"hauteur libre minimum {2.90}m requis."
         )
 
@@ -784,3 +917,154 @@ def generate_plan(
             )
 
     return floor_outputs, summary, warnings
+
+
+def _generate_windows_for_rooms(rooms: list[RoomOutput]) -> list[WindowOutput]:
+    windows = []
+    for room in rooms:
+        ext_walls = []
+        if room.has_exterior_wall_north: ext_walls.append("N")
+        if room.has_exterior_wall_south: ext_walls.append("S")
+        if room.has_exterior_wall_east:  ext_walls.append("E")
+        if room.has_exterior_wall_west:  ext_walls.append("W")
+        
+        if not ext_walls:
+            if room.room_type == "sdb_principale":
+                if "ventilation forcée requise" not in room.warnings:
+                    room.warnings.append("ventilation forcée requise")
+            continue
+            
+        # Select first exterior wall
+        wall = ext_walls[0]
+        w_len = room.width if wall in ("N", "S") else room.height
+        
+        if room.room_type.startswith("chambre_"):
+            windows.append(WindowOutput(
+                room_type=room.room_type,
+                wall_direction=wall,
+                position_ratio=0.5,
+                width_m=1.2,
+                height_m=1.2
+            ))
+        elif room.room_type == "salon_hotes":
+            if w_len >= 4.0:
+                windows.append(WindowOutput(
+                    room_type=room.room_type,
+                    wall_direction=wall,
+                    position_ratio=0.3,
+                    width_m=1.5,
+                    height_m=1.2
+                ))
+                windows.append(WindowOutput(
+                    room_type=room.room_type,
+                    wall_direction=wall,
+                    position_ratio=0.7,
+                    width_m=1.5,
+                    height_m=1.2
+                ))
+            else:
+                windows.append(WindowOutput(
+                    room_type=room.room_type,
+                    wall_direction=wall,
+                    position_ratio=0.5,
+                    width_m=1.5,
+                    height_m=1.2
+                ))
+        elif room.room_type == "salon_famille":
+            windows.append(WindowOutput(
+                room_type=room.room_type,
+                wall_direction=wall,
+                position_ratio=0.5,
+                width_m=1.5,
+                height_m=1.2
+            ))
+        elif room.room_type == "cuisine":
+            windows.append(WindowOutput(
+                room_type=room.room_type,
+                wall_direction=wall,
+                position_ratio=0.3,
+                width_m=0.9,
+                height_m=1.2
+            ))
+        elif room.room_type == "sdb_principale":
+            windows.append(WindowOutput(
+                room_type=room.room_type,
+                wall_direction=wall,
+                position_ratio=0.5,
+                width_m=0.6,
+                height_m=0.6
+            ))
+        elif room.room_type == "vestibule":
+            # high window (height=0.4m)
+            windows.append(WindowOutput(
+                room_type=room.room_type,
+                wall_direction=wall,
+                position_ratio=0.5,
+                width_m=0.6,
+                height_m=0.4
+            ))
+        else:
+            # Default window for other rooms with exterior walls
+            if "wc" in room.room_type or "sdb" in room.room_type:
+                width_m, height_m = 0.6, 0.6
+            else:
+                width_m, height_m = 0.9, 1.2
+            windows.append(WindowOutput(
+                room_type=room.room_type,
+                wall_direction=wall,
+                position_ratio=0.5,
+                width_m=width_m,
+                height_m=height_m
+            ))
+    return windows
+
+
+def build_circulation_graph(rooms: list[RoomOutput], doors: list[DoorOutput]) -> dict:
+    """
+    Build a connectivity graph:
+    - Nodes: each placed room (unique key based on type, floor, coordinates)
+    - Edges: two rooms are connected if they share a wall AND a door between them is generated
+    """
+    def get_node_key(r: RoomOutput) -> str:
+        return f"{r.room_type}_f{r.floor}_{r.x:.2f}_{r.y:.2f}"
+
+    adj = {get_node_key(r): set() for r in rooms}
+
+    # Connect stairs between adjacent floors
+    stair_by_floor = {}
+    for r in rooms:
+        if r.room_type == "escalier":
+            stair_by_floor[r.floor] = r
+    for f, esc in stair_by_floor.items():
+        if f + 1 in stair_by_floor:
+            k1 = get_node_key(esc)
+            k2 = get_node_key(stair_by_floor[f + 1])
+            adj[k1].add(k2)
+            adj[k2].add(k1)
+
+    # Match doors
+    for d in doors:
+        if d.to_room == "EXTERIOR":
+            continue
+        candidates = []
+        for r in rooms:
+            if r.room_type in (d.from_room, d.to_room):
+                if r.x - 0.05 <= d.x <= r.x + r.width + 0.05 and r.y - 0.05 <= d.y <= r.y + r.height + 0.05:
+                    candidates.append(r)
+        
+        by_floor = {}
+        for r in candidates:
+            by_floor.setdefault(r.floor, []).append(r)
+        
+        for f, f_rooms in by_floor.items():
+            from_candidates = [r for r in f_rooms if r.room_type == d.from_room]
+            to_candidates = [r for r in f_rooms if r.room_type == d.to_room]
+            if from_candidates and to_candidates:
+                for r1 in from_candidates:
+                    for r2 in to_candidates:
+                        k1 = get_node_key(r1)
+                        k2 = get_node_key(r2)
+                        adj[k1].add(k2)
+                        adj[k2].add(k1)
+
+    return {k: list(v) for k, v in adj.items()}

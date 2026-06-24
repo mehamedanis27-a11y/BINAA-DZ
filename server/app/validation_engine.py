@@ -275,6 +275,30 @@ def _validate_algerian_cultural(
                 suggested_fix="Repositionner la cuisine pour qu'elle touche au moins un mur extérieur",
             ))
 
+    # Chambre must have exterior wall (HIGH)
+    bedrooms = [r for fl in floors for r in fl.rooms if "chambre" in r.room_type]
+    for bedroom in bedrooms:
+        if not _room_orientations(bedroom):
+            issues.append(ValidationIssue(
+                code="BEDROOM_NO_EXTERIOR_WALL",
+                message_fr=f"La chambre '{bedroom.label_fr}' (R+{bedroom.floor}) n'a pas de mur extérieur — lumière et ventilation naturelles impossibles",
+                severity="HIGH",
+                room_involved=bedroom.room_type,
+                suggested_fix="Repositionner la chambre pour qu'elle touche au moins un mur extérieur",
+            ))
+
+    # Salon famille must have exterior wall (MEDIUM)
+    salon_famille_rooms = [r for fl in floors for r in fl.rooms if r.room_type == "salon_famille"]
+    for sf in salon_famille_rooms:
+        if not _room_orientations(sf):
+            issues.append(ValidationIssue(
+                code="SALON_FAMILLE_NO_EXTERIOR_WALL",
+                message_fr="Le séjour familial n'a pas de mur extérieur — éclairage naturel insuffisant",
+                severity="MEDIUM",
+                room_involved="salon_famille",
+                suggested_fix="Déplacer le séjour familial vers une cellule en façade ou périphérique",
+            ))
+
     # ── C5: Garage street-facing only ───────────────────────
     garage = rooms.get("garage")
     if garage and not garage.has_exterior_wall_north:
@@ -386,8 +410,7 @@ def _validate_structural(
     Also checks staircase structural enclosure.
     """
     issues = []
-    SPAN_LIMITS = {"HIGH": 4.5, "MEDIUM": 5.0, "LOW": 5.0}
-    limit = SPAN_LIMITS.get(seismic_zone, 5.0)
+    limit = 4.5
 
     for fl in floors:
         for room in fl.rooms:
@@ -396,7 +419,7 @@ def _validate_structural(
                 issues.append(ValidationIssue(
                     code="SPAN_EXCEEDED_WIDTH",
                     message_fr=f"{room.label_fr}: largeur {room.width:.2f}m dépasse la portée "
-                               f"maximale {limit}m (zone {seismic_zone}). Un poteau intermédiaire sera visible.",
+                               f"maximale {limit}m. Un poteau intermédiaire sera visible.",
                     severity="HIGH",
                     room_involved=room.room_type,
                     suggested_fix=f"Réduire la largeur à max {limit}m ou accepter un poteau intermédiaire",
@@ -515,6 +538,103 @@ def _validate_circulation(
                     suggested_fix="Rapprocher le salon invités du vestibule (cellule adjacente)",
                 ))
 
+        # Staircase upper floor adjacency check
+        if fl.floor_number > 0:
+            stair = next((r for r in fl.rooms if r.room_type == "escalier"), None)
+            if stair:
+                bedrooms = [r for r in fl.rooms if "chambre" in r.room_type]
+                if bedrooms:
+                    has_adj_bedroom = any(_rooms_share_wall(stair, b) for b in bedrooms)
+                    if not has_adj_bedroom:
+                        issues.append(ValidationIssue(
+                            code="STAIRCASE_NO_ADJACENT_BEDROOM",
+                            message_fr="Aucune chambre n'est adjacente à l'escalier sur l'étage supérieur.",
+                            severity="HIGH",
+                            room_involved="escalier",
+                            suggested_fix="Placer au moins une chambre adjacente à la cage d'escalier pour la zone privée.",
+                        ))
+
+    return issues
+
+
+def check_circulation_connectivity(floors: list[FloorOutput]) -> list[ValidationIssue]:
+    issues = []
+    # Extract all rooms and doors
+    rooms = [r for fl in floors for r in fl.rooms]
+    doors = [d for fl in floors for d in fl.doors]
+    
+    # Find vestibule on floor 0
+    vestibule = next((r for r in rooms if r.room_type == "vestibule" and r.floor == 0), None)
+    if not vestibule:
+        return issues
+
+    from .plan_engine import build_circulation_graph
+    graph = build_circulation_graph(rooms, doors)
+    
+    vest_key = f"{vestibule.room_type}_f{vestibule.floor}_{vestibule.x:.2f}_{vestibule.y:.2f}"
+    
+    # BFS 1: Unrestricted
+    visited_unrestricted = set()
+    queue = [vest_key]
+    visited_unrestricted.add(vest_key)
+    while queue:
+        curr = queue.pop(0)
+        for neighbor in graph.get(curr, []):
+            if neighbor not in visited_unrestricted:
+                visited_unrestricted.add(neighbor)
+                queue.append(neighbor)
+
+    # BFS 2: Restricted (avoid traversing public rooms)
+    visited_restricted = set()
+    queue_rest = [vest_key]
+    visited_restricted.add(vest_key)
+    while queue_rest:
+        curr = queue_rest.pop(0)
+        curr_type = curr.split("_f")[0]
+        # If the room itself is public, do not traverse its neighbors (but it is visited)
+        if curr_type in ("salon_hotes", "wc_invites"):
+            continue
+            
+        for neighbor in graph.get(curr, []):
+            if neighbor not in visited_restricted:
+                visited_restricted.add(neighbor)
+                queue_rest.append(neighbor)
+
+    for r in rooms:
+        r_key = f"{r.room_type}_f{r.floor}_{r.x:.2f}_{r.y:.2f}"
+        
+        # Garage does not need to connect to the house necessarily
+        if r.room_type == "garage":
+            continue
+            
+        if r_key not in visited_unrestricted:
+            if "chambre" in r.room_type:
+                issues.append(ValidationIssue(
+                    code="BEDROOM_UNREACHABLE",
+                    message_fr=f"{r.label_fr} (R+{r.floor}) est inaccessible depuis le vestibule.",
+                    severity="CRITICAL",
+                    room_involved=r.room_type,
+                    suggested_fix="Relier la chambre à un dégagement ou au vestibule via une porte.",
+                ))
+            else:
+                issues.append(ValidationIssue(
+                    code="ROOM_UNREACHABLE",
+                    message_fr=f"{r.label_fr} (R+{r.floor}) est inaccessible depuis le vestibule.",
+                    severity="HIGH",
+                    room_involved=r.room_type,
+                    suggested_fix="Ajouter une porte ou un dégagement de liaison.",
+                ))
+            continue
+            
+        if "chambre" in r.room_type and r_key not in visited_restricted:
+            issues.append(ValidationIssue(
+                code="BEDROOM_THROUGH_PUBLIC",
+                message_fr=f"{r.label_fr} (R+{r.floor}) accessible uniquement en traversant une zone publique (salon invités).",
+                severity="CRITICAL",
+                room_involved=r.room_type,
+                suggested_fix="Créer un couloir ou dégagement pour accéder aux chambres sans passer par le salon invités.",
+            ))
+            
     return issues
 
 
@@ -545,6 +665,7 @@ def validate_plan(
     all_issues += _validate_structural(floors, seismic_zone, max_span_m)
     all_issues += _validate_climate(floors, climate_zone)
     all_issues += _validate_circulation(floors)
+    all_issues += check_circulation_connectivity(floors)
 
     # ── GEOTECHNICAL RISK ─────────────────────────────────────────
     if slope_category == "steep" and soil_category in ("soft", "unknown"):

@@ -1,5 +1,7 @@
 import React, { useCallback, useState } from 'react'
 import PlanViewer from './PlanViewer'
+import TopAppBar from './TopAppBar'
+import NavSidebar from './NavSidebar'
 
 /* ============================================================
    ResultsScreen — BINAA Results (Architectural-Tech UI)
@@ -25,40 +27,37 @@ const PACKAGE_LABELS = {
   premium:  { label: 'Premium',    icon: 'diamond',  color: 'text-accent-dark'  },
 }
 
-export default function ResultsScreen({ planData, userBudget, onNewProject }) {
-  const cost = planData?.cost_estimate
-  const materials = planData?.material_recommendations
-  const warnings = planData?.warnings || []
+function SectionLabel({ children }) {
+  return (
+    <label className="block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">
+      {children}
+    </label>
+  )
+}
+
+export default function ResultsScreen({ planData, userBudget, onNewProject, onNavigate, lang, onLangChange }) {
+  const cost = planData?.cost_estimate || planData?.data?.cost_estimate
+  const materials = planData?.material_recommendations || planData?.data?.material_recommendations
+  const warnings = planData?.warnings || planData?.data?.warnings || []
+  const siteAnalysis = planData?.site_analysis || planData?.data?.site_analysis
+  const summary = planData?.summary || planData?.data?.summary
 
   const [selectedCat, setSelectedCat] = useState('all')
+  const [emailStatus, setEmailStatus] = useState(null)
   const catFilter = selectedCat === 'all' ? null : selectedCat
 
-  const minCost = cost?.estimated_min_da || 0
-  const maxCost = cost?.estimated_max_da || 0
+  const minCost = cost?.cost_min || 0
+  const maxCost = cost?.cost_max || 0
   const budgetStatus = cost?.budget_status || ''
   const budgetMessage = cost?.budget_message || ''
 
-  // breakdown is now list[CostBreakdownLine] — build display buckets from it
-  const breakdownList = Array.isArray(cost?.breakdown) ? cost.breakdown : []
-  const goLines   = breakdownList.filter(l => l.label_fr?.includes('Gros') || l.label_fr?.includes('Structure') || l.label_fr?.includes('Fondation'))
-  const finLines  = breakdownList.filter(l => l.label_fr?.includes('Finition') || l.label_fr?.includes('Plomberie') || l.label_fr?.includes('Électricité') || l.label_fr?.includes('Peinture') || l.label_fr?.includes('Revêtement') || l.label_fr?.includes('Toiture'))
-  const vrdLines  = breakdownList.filter(l => l.label_fr?.includes('VRD') || l.label_fr?.includes('Raccordement'))
-  const haouchLine = breakdownList.find(l =>
-    l.label_fr?.includes('Clôture') || l.label_fr?.includes('Haouch')
-  )
-  const contingencyLine = breakdownList.find(l => l.label_fr?.includes('Imprévus'))
+  const inputParams = planData?.data?.input_params || planData?.input_params
+  const floors = inputParams?.floors !== undefined ? inputParams.floors : 0
+  const built_area_total_m2 = cost?.built_area_total_m2 || summary?.total_built_area_m2 || 0
 
-  // Aggregate min/max per bucket for display
-  const sumLines = (lines) => ({
-    min: lines.reduce((s, l) => s + (l.amount_min || 0), 0),
-    max: lines.reduce((s, l) => s + (l.amount_max || 0), 0),
-  })
-  const grosOeuvresBreakdown = sumLines(goLines)
-  const finitionBreakdown    = sumLines(finLines)
-  const vrdBreakdown         = sumLines(vrdLines)
-  const haouchBreakdown      = haouchLine
-    ? { cost: Math.round(((haouchLine.amount_min || 0) + (haouchLine.amount_max || 0)) / 2) }
-    : { cost: 0 }
+  const breakdown = cost?.breakdown || {}
+  const structFin = breakdown.structure_et_finitions || { min: 0, max: 0 }
+  const imprevus = breakdown.imprévus || breakdown.imprevus || { min: 0, max: 0 }
 
   const packageKey = materials?.package_level_key || 'standard'
   const packageInfo = PACKAGE_LABELS[packageKey] || PACKAGE_LABELS.standard
@@ -103,18 +102,20 @@ export default function ResultsScreen({ planData, userBudget, onNewProject }) {
     const siteSummary = planData.data ? planData.data.summary : planData.summary
     const costData = planData.data ? planData.data.cost_estimate : planData.cost_estimate
     const siteAnalysis = planData.data ? planData.data.site_analysis : planData.site_analysis
+    const wilName = siteAnalysis?.wilaya_name || siteSummary?.wilaya_name || 'Algérie'
+    const totBuilt = costData?.built_area_total_m2 || siteSummary?.total_built_area_m2 || siteAnalysis?.total_built_area_m2 || 0
     ctx.font = '22px sans-serif'
     ctx.fillStyle = 'rgba(255,255,255,0.6)'
     ctx.fillText(
-      `${costData.wilaya_name} · ${siteSummary.total_built_m2?.toFixed(0) ?? '–'} m²`,
+      `${wilName} · ${totBuilt?.toFixed(0) ?? '–'} m²`,
       50, 150
     )
 
     // Cost range
     ctx.font = 'bold 72px sans-serif'
     ctx.fillStyle = '#E8622A'
-    const minM = (costData.estimated_min_da / 1_000_000).toFixed(1)
-    const maxM = (costData.estimated_max_da / 1_000_000).toFixed(1)
+    const minM = ((costData?.cost_min || 0) / 1_000_000).toFixed(1)
+    const maxM = ((costData?.cost_max || 0) / 1_000_000).toFixed(1)
     ctx.fillText(`${minM}M – ${maxM}M DA`, 50, 270)
 
     // Budget status
@@ -131,13 +132,13 @@ export default function ResultsScreen({ planData, userBudget, onNewProject }) {
       insufficient:'✗ Budget insuffisant',
     }
     ctx.font = 'bold 32px sans-serif'
-    ctx.fillStyle = statusColors[costData.budget_status] ?? '#fff'
-    ctx.fillText(statusLabels[costData.budget_status] ?? costData.budget_status, 50, 360)
+    ctx.fillStyle = statusColors[costData?.budget_status] ?? '#fff'
+    ctx.fillText(statusLabels[costData?.budget_status] ?? costData?.budget_status ?? '', 50, 360)
 
     // Site info
     ctx.font = '20px sans-serif'
     ctx.fillStyle = 'rgba(255,255,255,0.45)'
-    ctx.fillText(`${siteAnalysis.effective_width_m?.toFixed(1)}m × ${siteAnalysis.effective_depth_m?.toFixed(1)}m constructibles`, 50, 420)
+    ctx.fillText(`${siteAnalysis?.built_width_m?.toFixed(1) ?? '–'}m × ${siteAnalysis?.built_depth_m?.toFixed(1) ?? '–'}m d'emprise`, 50, 420)
 
     // Footer
     ctx.font = '18px monospace'
@@ -162,519 +163,397 @@ export default function ResultsScreen({ planData, userBudget, onNewProject }) {
   }, [planData])
 
   return (
-    <div className="min-h-dvh bg-bg">
-      {/* ── Header ── */}
-      <header className="sticky top-0 z-50 bg-bg/90 backdrop-blur-md flex items-center justify-between px-5 py-4 border-b border-border-light">
-        <div className="flex items-center gap-3">
+    <div className="min-h-dvh bg-[var(--bg-base)] flex flex-col text-[var(--text-primary)]">
+      <TopAppBar authenticated={true} activePage="wizard" onNavigate={onNavigate} lang={lang} onLangChange={onLangChange} />
+      <NavSidebar activePage="wizard" onNavigate={onNavigate} onNewEstimation={onNewProject} />
+      
+      <div className="flex-1 w-full layout-content layout-sidebar-offset">
+        <main className="pb-16 px-4 lg:px-10 max-w-[var(--container-max)] mx-auto w-full">
+          
+          {/* Navigation Action header */}
+          <div className="flex items-center gap-3 mb-6 mt-4">
           <button
-            className="flex items-center justify-center p-2 rounded-lg hover:bg-card-alt transition-colors"
             onClick={onNewProject}
+            className="flex items-center justify-center p-2 rounded-lg bg-[var(--bg-surface-3)] border border-[var(--border-subtle)] hover:bg-[var(--bg-surface-high)] text-white transition-colors cursor-pointer"
           >
-            <span className="material-symbols-outlined text-primary">arrow_back</span>
+            <span className="material-symbols-outlined text-lg">arrow_back</span>
           </button>
-          <h1 className="text-xl font-bold tracking-tight text-primary">
-            BINAA
-          </h1>
-        </div>
-      </header>
-
-      <main className="w-full max-w-none px-4 py-8 space-y-5">
-
-        {/* ── Hero: Budget Range ── */}
-        <section className="bg-primary rounded-xl p-6 text-white shadow-md overflow-hidden relative">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -mr-16 -mt-16" />
-
-          <div className="flex justify-between items-start mb-4">
-            <span className="text-xs uppercase tracking-widest opacity-80 font-medium">Estimation Totale</span>
-            <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-              budgetStatus === 'insufficient'
-                ? 'bg-red-100 text-red-800'
-                : 'bg-green-100 text-green-800'
-            }`}>
-              {budgetStatus === 'comfortable' ? '✓ Budget confortable'
-                : budgetStatus === 'sufficient' ? '✓ Budget suffisant'
-                : budgetStatus === 'tight' ? '⚠ Budget serré'
-                : budgetStatus === 'insufficient' ? '✗ Budget insuffisant'
-                : 'Estimé'}
-            </span>
-          </div>
-
-          <div className="space-y-1">
-            <h2 className="text-3xl font-bold tracking-tight">
-              {formatMillions(minCost)} – {formatMillions(maxCost)}
-            </h2>
-            <p className="text-base font-medium opacity-90">DZD (Dinars Algériens)</p>
-          </div>
-
-          <div className="mt-6 pt-5 border-t border-white/10">
-            <p className="text-xs opacity-70 mb-3">
-              Votre budget cible: {formatMillions(userBudget)} DZD
-            </p>
-            <div className="w-full h-2.5 bg-white/10 rounded-full relative overflow-hidden">
-              <div
-                className="absolute left-0 top-0 h-full bg-accent rounded-full transition-all duration-700"
-                style={{ width: `${gaugePercent}%` }}
-              />
-              <div
-                className="absolute h-3.5 w-1 bg-white top-1/2 -translate-y-1/2 rounded-full shadow-sm"
-                style={{ left: `${budgetMarkerPercent}%` }}
-              />
-            </div>
-            <div className="flex justify-between mt-2 text-[10px] opacity-60">
-              <span>Min: {formatMillions(minCost)}</span>
-              <span>Max: {formatMillions(maxCost)}</span>
-            </div>
-          </div>
-
-          {cost?.price_data_date && (
-            <div style={{
-              fontSize: '11px',
-              color: 'var(--text-muted, #7b8299)',
-              marginTop: '6px',
-              fontFamily: 'monospace'
-            }}>
-              Tarifs de référence — {cost.price_data_date}
-            </div>
-          )}
-        </section>
-
-        {/* ── Budget Status Message ── */}
-        {budgetMessage && (
-          <div className={`p-4 rounded-xl flex items-start gap-3 border ${
-            budgetStatus === 'insufficient'
-              ? 'bg-danger-bg border-danger/20'
-              : budgetStatus === 'sufficient'
-              ? 'bg-success-bg border-success/20'
-              : 'bg-warning-bg border-amber-200'
-          }`}>
-            <span className={`material-symbols-outlined mt-0.5 ${
-              budgetStatus === 'insufficient' ? 'text-danger' : budgetStatus === 'sufficient' ? 'text-brand-green' : 'text-amber-600'
-            }`}>
-              {budgetStatus === 'insufficient' ? 'warning' : budgetStatus === 'sufficient' ? 'info' : 'check_circle'}
-            </span>
-            <p className="text-xs text-muted leading-relaxed">{budgetMessage}</p>
-          </div>
-        )}
-
-        {/* ── Budget Gap Display ── */}
-        {cost?.budget_gap_da > 0 && (
-          <div style={{fontSize:'12px', color:'var(--red, #e63946)', padding:'8px 12px', background:'rgba(230,57,70,0.08)', borderRadius:'8px'}}>
-            Il vous manque{' '}
-            <strong>{cost.budget_gap_da.toLocaleString('fr-DZ')} DA</strong>
-            {' '}pour atteindre le minimum estimé.
-          </div>
-        )}
-        {cost?.budget_gap_da < 0 && (
-          <div style={{fontSize:'12px', color:'var(--green, #2dc653)', padding:'8px 12px', background:'rgba(45,198,83,0.08)', borderRadius:'8px'}}>
-            Marge disponible:{' '}
-            <strong>{Math.abs(cost.budget_gap_da).toLocaleString('fr-DZ')} DA</strong>
-            {' '}après la fourchette haute.
-          </div>
-        )}
-
-        {/* ── Generation Warnings Banner ── */}
-        {(planData?.data?.warnings?.length > 0 || planData?.warnings?.length > 0) && (
-          <div style={{
-            background:'rgba(233,196,106,0.1)',
-            border:'1px solid rgba(233,196,106,0.3)',
-            borderRadius:'8px',
-            padding:'12px 16px',
-            marginBottom:'16px',
-          }}>
-            <div style={{fontSize:'11px', fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'#e9c46a', marginBottom:'8px'}}>
-              Avertissements du programme
-            </div>
-            <ul style={{listStyle:'none', padding:0, margin:0}}>
-              {(planData?.data?.warnings || planData?.warnings || []).map((w, i) => (
-                <li key={i} style={{fontSize:'12px', color:'rgba(255,255,255,0.75)', padding:'3px 0'}}>⚠ {w}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* ── Cost Breakdown ── */}
-        <section className="space-y-3">
-          <h3 className="text-base font-bold text-text px-1">Répartition par lot</h3>
-
-          {/* Gros Œuvres */}
-          <div className="bg-card border border-border rounded-xl p-4 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="bg-bg p-2.5 rounded-lg text-primary">
-                  <span className="material-symbols-outlined">architecture</span>
-                </div>
-                <div>
-                  <p className="font-semibold text-sm text-text">Gros œuvre (Structure)</p>
-                  <p className="text-[10px] text-muted">Béton, acier, maçonnerie</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="font-bold text-text">
-                  {grosOeuvresBreakdown.min && grosOeuvresBreakdown.max
-                    ? `${Math.round(((grosOeuvresBreakdown.min + grosOeuvresBreakdown.max) / 2) / safeDivisor * 100)}%`
-                    : '—'}
-                </p>
-                <p className="text-[10px] text-primary font-semibold">
-                  ~{formatMillions(((grosOeuvresBreakdown.min || 0) + (grosOeuvresBreakdown.max || 0)) / 2)} DZD
-                </p>
-              </div>
-            </div>
-            <div className="w-full h-1.5 bg-border mt-3 rounded-full overflow-hidden">
-                <div className="h-full bg-primary" style={{ width: `${Math.round(((grosOeuvresBreakdown.min + grosOeuvresBreakdown.max) / 2) / safeDivisor * 100)}%` }} />
-            </div>
-          </div>
-
-          {/* Finition */}
-          <div className="bg-card border border-border rounded-xl p-4 flex flex-col justify-between">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="bg-bg p-2.5 rounded-lg text-primary">
-                  <span className="material-symbols-outlined">format_paint</span>
-                </div>
-                <div>
-                  <p className="font-semibold text-sm text-text">Second œuvre (Finition)</p>
-                  <p className="text-[10px] text-muted">Plâtre, plomberie, sols</p>
-                </div>
-              </div>
-              <div className="text-right">
-                <p className="font-bold text-text">
-                  {finitionBreakdown.min && finitionBreakdown.max
-                    ? `${Math.round(((finitionBreakdown.min + finitionBreakdown.max) / 2) / safeDivisor * 100)}%`
-                    : '—'}
-                </p>
-                <p className="text-[10px] text-primary font-semibold">
-                  ~{formatMillions(((finitionBreakdown.min || 0) + (finitionBreakdown.max || 0)) / 2)} DZD
-                </p>
-              </div>
-            </div>
-            <div className="w-full h-1.5 bg-border mt-3 rounded-full overflow-hidden">
-                <div className="h-full bg-primary" style={{ width: `${Math.round(((finitionBreakdown.min + finitionBreakdown.max) / 2) / safeDivisor * 100)}%` }} />
-            </div>
-          </div>
-
-          {/* VRD */}
-          {(vrdBreakdown.min > 0 || vrdBreakdown.max > 0) && (
-            <div className="bg-card border border-border rounded-xl p-4 flex flex-col justify-between">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="bg-bg p-2.5 rounded-lg text-primary">
-                    <span className="material-symbols-outlined">power</span>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-sm text-text">VRD & Raccordements</p>
-                    <p className="text-[10px] text-muted">Eau, électricité, gaz</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-text">
-                    {vrdBreakdown.min && vrdBreakdown.max
-                      ? `${Math.round(((vrdBreakdown.min + vrdBreakdown.max) / 2) / safeDivisor * 100)}%`
-                      : '—'}
-                  </p>
-                  <p className="text-[10px] text-primary font-semibold">
-                    ~{formatMillions(((vrdBreakdown.min || 0) + (vrdBreakdown.max || 0)) / 2)} DZD
-                  </p>
-                </div>
-              </div>
-              <div className="w-full h-1.5 bg-border mt-3 rounded-full overflow-hidden">
-                  <div className="h-full bg-primary" style={{ width: `${Math.round(((vrdBreakdown.min + vrdBreakdown.max) / 2) / safeDivisor * 100)}%` }} />
-              </div>
-            </div>
-          )}
-
-          {/* Haouch */}
-          {haouchBreakdown.cost > 0 && (
-            <div className="bg-card border border-border rounded-xl p-4 flex flex-col justify-between">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="bg-bg p-2.5 rounded-lg text-primary">
-                    <span className="material-symbols-outlined">yard</span>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-sm text-text">Haouch / Extérieur</p>
-                    <p className="text-[10px] text-muted">Cour, clôture, aménagement</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-text">
-                    {`${Math.round(haouchBreakdown.cost / safeDivisor * 100)}%`}
-                  </p>
-                  <p className="text-[10px] text-primary font-semibold">
-                    ~{formatMillions(haouchBreakdown.cost)} DZD
-                  </p>
-                </div>
-              </div>
-              <div className="w-full h-1.5 bg-border mt-3 rounded-full overflow-hidden">
-                  <div className="h-full bg-primary" style={{ width: `${Math.round(haouchBreakdown.cost / safeDivisor * 100)}%` }} />
-              </div>
-            </div>
-          )}
-
-          {/* Imprévus (contingency) — new in v2 backend */}
-          {contingencyLine && (
-            <div className="bg-card border border-accent/20 rounded-xl p-4 flex flex-col justify-between">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="bg-bg p-2.5 rounded-lg text-accent-dark">
-                    <span className="material-symbols-outlined">savings</span>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-sm text-text">Imprévus (20%)</p>
-                    <p className="text-[10px] text-muted">Réserve obligatoire Algérie</p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-accent-dark">
-                    {`${Math.round(((contingencyLine.amount_min + contingencyLine.amount_max) / 2) / safeDivisor * 100)}%`}
-                  </p>
-                  <p className="text-[10px] text-accent-dark font-semibold">
-                    ~{formatMillions(Math.round((contingencyLine.amount_min + contingencyLine.amount_max) / 2))} DZD
-                  </p>
-                </div>
-              </div>
-              <div className="w-full h-1.5 bg-border mt-3 rounded-full overflow-hidden">
-                  <div className="h-full bg-accent-dark" style={{ width: `${Math.round(((contingencyLine.amount_min + contingencyLine.amount_max) / 2) / safeDivisor * 100)}%` }} />
-              </div>
-            </div>
-          )}
-
-          {/* Seismic context — new in v2 backend */}
-          {cost?.seismic_zone && (cost?.seismic_surcharge_da || 0) > 0 && (
-            <div className="bg-card border border-border rounded-xl p-3 flex items-center gap-3">
-              <span className="material-symbols-outlined text-muted text-base">crisis_alert</span>
-              <p className="text-[11px] text-muted leading-relaxed">
-                Zone sismique <strong className="text-text">{cost.seismic_zone}</strong>
-                {' '}— surcharge structurelle incluse: <strong className="text-text">+{formatMillions(cost.seismic_surcharge_da)} DZD</strong>.
+          <div>
+            <h2 className="font-['Manrope'] font-bold text-lg text-white">Résultats de l'estimation</h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-semibold">Projet · Conforme RPA 99</p>
+              <span className="text-[var(--text-muted)] text-[10px] font-semibold">•</span>
+              <p className="text-[10px] text-[var(--text-muted)] uppercase tracking-wider font-semibold">
+                Surface totale construite : {built_area_total_m2} m² ({floors + 1} niveaux)
               </p>
             </div>
-          )}
+          </div>
+        </div>
 
-          {/* Detailed line-by-line breakdown with percentage bars */}
-          {breakdownList.length > 0 && (
-            <div className="mt-4">
-              <h4 className="text-xs font-semibold text-muted uppercase tracking-wider px-1 mb-2">Détail par poste</h4>
-              <div className="space-y-2">
-                {breakdownList.map((line, idx) => {
-                  const pct = minCost > 0 ? Math.round((line.amount_min / minCost) * 100) : 0
-                  return (
-                    <div key={`bl-${idx}`} className="bg-card border border-border rounded-lg p-3">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-text truncate">{line.label_fr}</p>
-                          {line.note && (
-                            <p className="text-[10px] text-muted mt-0.5 leading-snug line-clamp-2">{line.note}</p>
-                          )}
-                        </div>
-                        <div className="text-right shrink-0">
-                          <p className="text-xs font-bold text-text whitespace-nowrap">
-                            {formatNumber(line.amount_min)} – {formatNumber(line.amount_max)}
-                          </p>
-                          <p className="text-[10px] text-muted">{pct}%</p>
-                        </div>
-                      </div>
-                      <div style={{marginTop:'4px', height:'3px', background:'rgba(255,255,255,0.08)', borderRadius:'2px', overflow:'hidden'}}>
-                        <div style={{width:`${Math.min(pct, 100)}%`, height:'100%', background:'var(--orange, #f06429)', borderRadius:'2px'}} />
-                      </div>
-                    </div>
-                  )
-                })}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+          
+          {/* Left / Main Column: Costs, Breakdown & Plan */}
+          <div className="lg:col-span-2 space-y-6">
+            
+            {/* Hero Card: Budget range & gauge */}
+            <div className="bg-[var(--navy)] border border-[var(--border-default)] rounded-2xl p-6 relative overflow-hidden orange-glow">
+              <div className="absolute top-0 right-0 p-6 opacity-5 pointer-events-none">
+                <span className="material-symbols-outlined" style={{ fontSize: '100px' }}>payments</span>
+              </div>
+
+              <div className="flex justify-between items-start mb-6">
+                <span className="text-[10px] uppercase tracking-widest text-[var(--text-secondary)] font-semibold">Fourchette d'estimation gros-œuvre + finitions</span>
+                <span className={`badge-${budgetStatus || 'standard'}`}>
+                  {budgetStatus === 'comfortable' ? '✓ Confortable'
+                    : budgetStatus === 'sufficient' ? '✓ Suffisant'
+                    : budgetStatus === 'tight' ? '⚠ Serré'
+                    : budgetStatus === 'insufficient' ? '✗ Insuffisant'
+                    : 'Estimé'}
+                </span>
+              </div>
+
+              <div className="mb-6">
+                <h3 className="font-['IBM_Plex_Mono'] text-3xl lg:text-4xl font-extrabold text-white tracking-tight">
+                  {formatMillions(minCost)} – {formatMillions(maxCost)} <span className="text-sm font-semibold text-[var(--text-secondary)]">DA</span>
+                </h3>
+                
+                {/* Surface construite totale */}
+                <p className="text-xs text-[var(--text-secondary)] mt-2">
+                  Surface totale construite : <strong className="text-white">{built_area_total_m2} m²</strong> ({floors + 1} niveaux)
+                </p>
+
+                {cost?.pricing_last_updated && (
+                  <div className="flex items-center gap-1.5 mt-2.5 text-[10px] text-[var(--text-muted)] font-['IBM_Plex_Mono']">
+                    <span className="material-symbols-outlined text-[14px] text-[var(--success)]">verified</span>
+                    <span>Données validées : {cost.validation_source} ({cost.pricing_last_updated})</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-4 border-t border-[rgba(255,255,255,0.08)]">
+                <div className="flex justify-between text-xs text-[var(--text-secondary)] mb-2 font-medium">
+                  <span>Votre budget cible : {formatMillions(userBudget)} DA</span>
+                  <span>Max : {formatMillions(maxCost)} DA</span>
+                </div>
+                <div className="w-full h-3 bg-[var(--bg-base)] rounded-full relative overflow-hidden border border-[var(--border-subtle)]">
+                  <div
+                    className="absolute left-0 top-0 h-full bg-[var(--orange)] rounded-full transition-all duration-1000"
+                    style={{ width: `${gaugePercent}%` }}
+                  />
+                  <div
+                    className="absolute h-4 w-1 bg-white top-1/2 -translate-y-1/2 rounded-full shadow-md z-10"
+                    style={{ left: `${budgetMarkerPercent}%` }}
+                  />
+                </div>
+                <div className="flex justify-between mt-2 text-[10px] text-[var(--text-muted)] font-['IBM_Plex_Mono']">
+                  <span>Min ({formatMillions(minCost)})</span>
+                  <span>Moyen (~{formatNumber((minCost + maxCost) / 2)} DA)</span>
+                  <span>Max ({formatMillions(maxCost)})</span>
+                </div>
               </div>
             </div>
-          )}
 
-          <button
-            onClick={handleShare}
-            style={{
-              marginTop: '16px',
-              padding: '10px 20px',
-              background: '#25D366',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '13px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-            }}
-          >
-            <span style={{fontSize:'16px'}}>📤</span>
-            Partager sur WhatsApp
-          </button>
-        </section>
-
-        {/* Validation issues — new in v2 backend, invisible on old backend */}
-        {criticalIssues.length > 0 && (
-          <section className="space-y-3">
-            <h3 className="text-base font-bold text-text px-1">Points Critiques</h3>
-            {criticalIssues.map((issue, i) => (
-              <div
-                key={`issue-${i}`}
-                className={`rounded-xl p-4 flex gap-3 items-start border ${
-                  issue.severity === 'CRITICAL'
-                    ? 'bg-danger-bg border-danger/20'
-                    : 'bg-warning-bg border-amber-200'
-                }`}
-              >
-                <span className={`material-symbols-outlined mt-0.5 text-base ${
-                  issue.severity === 'CRITICAL' ? 'text-danger' : 'text-amber-600'
+            {/* Budget status detail block */}
+            {budgetMessage && (
+              <div className={`p-4 rounded-xl flex items-start gap-3 border ${
+                budgetStatus === 'insufficient'
+                  ? 'bg-[var(--danger-bg)] border-[var(--danger)]/20'
+                  : budgetStatus === 'sufficient'
+                  ? 'bg-[var(--success-bg)] border-[var(--success)]/20'
+                  : 'bg-[var(--warning-bg)] border-[var(--warning)]/20'
+              }`}>
+                <span className={`material-symbols-outlined mt-0.5 ${
+                  budgetStatus === 'insufficient' ? 'text-[var(--danger)]' : budgetStatus === 'comfortable' ? 'text-[var(--success)]' : 'text-[var(--warning)]'
                 }`}>
-                  {issue.severity === 'CRITICAL' ? 'error' : 'warning'}
+                  {budgetStatus === 'insufficient' ? 'error' : budgetStatus === 'comfortable' ? 'check_circle' : 'warning'}
                 </span>
-                <div>
-                  <p className="text-xs text-text font-semibold leading-snug">{issue.message_fr}</p>
-                  {issue.suggested_fix && (
-                    <p className="text-[10px] text-muted mt-1 leading-relaxed">✏ {issue.suggested_fix}</p>
+                <div className="flex-1">
+                  <p className="text-xs text-[var(--text-primary)] font-medium leading-relaxed">{budgetMessage}</p>
+                  
+                  {cost?.budget_gap_da > 0 && (
+                    <p className="text-xs font-bold text-[var(--danger)] mt-1.5 font-['IBM_Plex_Mono']">
+                      Écart à combler : +{cost.budget_gap_da.toLocaleString('fr-DZ')} DA
+                    </p>
+                  )}
+                  {cost?.budget_gap_da < 0 && (
+                    <p className="text-xs font-bold text-[var(--success)] mt-1.5 font-['IBM_Plex_Mono']">
+                      Marge restante sécurisée : {Math.abs(cost.budget_gap_da).toLocaleString('fr-DZ')} DA
+                    </p>
                   )}
                 </div>
               </div>
-            ))}
-          </section>
-        )}
+            )}
 
-        {/* ── Materials ── */}
-        {materials && (
-          <section className="space-y-3">
-            <h3 className="text-base font-bold text-text px-1">Matériaux Recommandés</h3>
-
-            <div className="bg-card border border-border rounded-xl p-5">
-              <div className="flex items-center gap-3 mb-2">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center bg-bg ${packageInfo.color}`}>
-                  <span className="material-symbols-outlined">{packageInfo.icon}</span>
+            {/* Program Warnings Banner */}
+            {(planData?.data?.warnings?.length > 0 || planData?.warnings?.length > 0) && (
+              <div className="bg-[var(--warning-bg)] border border-[var(--warning)]/20 rounded-xl p-4">
+                <div className="text-[10px] font-semibold uppercase tracking-widest text-[var(--warning)] mb-2">
+                  Avertissements réglementaires
                 </div>
-                <div>
-                  <p className="font-bold text-text">Pack {materials.package_level}</p>
-                  <p className="text-[11px] text-muted">{materials.description}</p>
+                <ul className="space-y-1 text-xs text-[var(--text-primary)]">
+                  {(planData?.data?.warnings || planData?.warnings || []).map((w, i) => (
+                    <li key={i} className="flex items-start gap-1">
+                      <span>•</span>
+                      <span>{w}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Plan 2D Drawing display */}
+            <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 shadow-xl">
+              <PlanViewer planData={planData} />
+            </div>
+
+            {/* Cost Breakdown by Lot */}
+            <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-6">
+              <div>
+                <h3 className="font-['Manrope'] font-bold text-lg text-white">Ventilation des coûts</h3>
+                <p className="text-xs text-[var(--text-muted)] mt-1">Estimation simplifiée selon la Méthode 01 (taux all-in).</p>
+              </div>
+
+              <div className="space-y-3">
+                {/* Structure + Finitions */}
+                <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--bg-surface-3)] border border-[var(--border-subtle)] hover:border-[var(--border-default)] transition-colors">
+                  <div>
+                    <p className="font-semibold text-xs text-white">Structure + Finitions</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">Gros œuvre + second œuvre (tout compris)</p>
+                  </div>
+                  <p className="font-['IBM_Plex_Mono'] font-bold text-xs text-white">
+                    {formatMillions(structFin.min)} – {formatMillions(structFin.max)} DA
+                  </p>
+                </div>
+
+                {/* Imprévus (20%) */}
+                <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--bg-surface-3)] border border-[var(--orange)]/25 hover:border-[var(--orange)]/45 transition-colors">
+                  <div>
+                    <p className="font-semibold text-xs text-[var(--orange)]">Imprévus (20%)</p>
+                    <p className="text-[10px] text-[var(--text-muted)]">Provision obligatoire aléas / inflation en Algérie</p>
+                  </div>
+                  <p className="font-['IBM_Plex_Mono'] font-bold text-xs text-[var(--orange)]">
+                    {formatMillions(imprevus.min)} – {formatMillions(imprevus.max)} DA
+                  </p>
+                </div>
+
+                {/* TOTAL */}
+                <div className="flex items-center justify-between p-4 rounded-xl bg-[var(--navy)] border border-[var(--orange)]/35 hover:scale-[1.01] transition-transform">
+                  <div>
+                    <p className="font-bold text-xs text-white">TOTAL ESTIMÉ</p>
+                    <p className="text-[10px] text-[var(--text-secondary)] font-medium">Tout compris (Structure, finitions et imprévus)</p>
+                  </div>
+                  <p className="font-['IBM_Plex_Mono'] font-extrabold text-sm text-[var(--orange)]">
+                    {formatMillions(minCost)} – {formatMillions(maxCost)} DA
+                  </p>
                 </div>
               </div>
             </div>
 
-            {grosOeuvresMats.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-muted uppercase tracking-wider px-1">Gros Œuvres</h4>
-                {grosOeuvresMats.map((item, i) => (
-                  <div key={`go-${i}`} className="bg-card border border-border rounded-xl p-3 flex items-start gap-3">
-                    <span className="material-symbols-outlined text-primary text-lg mt-0.5">construction</span>
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm text-text">{item.category}</p>
-                      <p className="text-xs text-muted">{item.material}</p>
-                      {item.note && <p className="text-[10px] text-muted/70 mt-1 italic">{item.note}</p>}
-                    </div>
-                  </div>
-                ))}
+            {/* Seismic Zone Info Banner (Informative only, not part of cost) */}
+            {siteAnalysis?.seismic_zone && (
+              <div className="bg-[var(--bg-surface-3)] border border-[var(--border-subtle)] rounded-xl p-4 flex items-center gap-3">
+                <span className="material-symbols-outlined text-[var(--text-muted)] text-base">info</span>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  Zone sismique <strong className="text-white">{siteAnalysis.seismic_zone}</strong> — Consultez un ingénieur structure (RPA 99 v2003)
+                </p>
               </div>
             )}
-
-            {finitionMats.length > 0 && (
-              <div className="space-y-2">
-                <h4 className="text-xs font-semibold text-muted uppercase tracking-wider px-1">Finition</h4>
-                {finitionMats.map((item, i) => (
-                  <div key={`fin-${i}`} className="bg-card border border-border rounded-xl p-3 flex items-start gap-3">
-                    <span className="material-symbols-outlined text-primary text-lg mt-0.5">format_paint</span>
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm text-text">{item.category}</p>
-                      <p className="text-xs text-muted">{item.material}</p>
-                      {item.note && <p className="text-[10px] text-muted/70 mt-1 italic">{item.note}</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {(planData?.data?.material_recommendations?.seismic_requirements?.length > 0 || materials?.seismic_requirements?.length > 0) && (
-              <div style={{marginTop:'16px', padding:'12px 16px', background:'rgba(230,57,70,0.08)', borderRadius:'8px', border:'1px solid rgba(230,57,70,0.2)'}}>
-                <div style={{fontSize:'11px', fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'#e63946', marginBottom:'8px'}}>
-                  Exigences sismiques réglementaires
-                </div>
-                <ul style={{listStyle:'none', padding:0, margin:0}}>
-                  {(planData?.data?.material_recommendations?.seismic_requirements || materials?.seismic_requirements || []).map((req, i) => (
-                    <li key={i} style={{fontSize:'12px', color:'rgba(255,255,255,0.7)', padding:'3px 0', borderBottom:'1px solid rgba(255,255,255,0.06)'}}>
-                      ⚠ {req}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {(planData?.data?.material_recommendations?.climate_requirements?.length > 0 || materials?.climate_requirements?.length > 0) && (
-              <div style={{marginTop:'10px', padding:'12px 16px', background:'rgba(72,149,239,0.08)', borderRadius:'8px', border:'1px solid rgba(72,149,239,0.2)'}}>
-                <div style={{fontSize:'11px', fontWeight:600, letterSpacing:'.06em', textTransform:'uppercase', color:'#4895ef', marginBottom:'8px'}}>
-                  Recommandations climatiques
-                </div>
-                <ul style={{listStyle:'none', padding:0, margin:0}}>
-                  {(planData?.data?.material_recommendations?.climate_requirements || materials?.climate_requirements || []).map((req, i) => (
-                    <li key={i} style={{fontSize:'12px', color:'rgba(255,255,255,0.7)', padding:'3px 0', borderBottom:'1px solid rgba(255,255,255,0.06)'}}>
-                      → {req}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* ── Plan Viewer ── */}
-        <section className="space-y-3">
-          <h3 className="text-base font-bold text-text px-1">Plan 2D — Votre Maison</h3>
-          <PlanViewer planData={planData} />
-        </section>
-
-        {/* ── Tips ── */}
-        {tips.length > 0 && (
-          <section className="space-y-3">
-            <h3 className="text-base font-bold text-text px-1">Conseils d'Experts</h3>
-            {tips.map((tip, i) => (
-              <div key={`tip-${i}`} className="bg-card border border-brand-green/15 rounded-xl p-4 flex gap-3 items-start">
-                <span className="material-symbols-outlined text-brand-green mt-0.5 filled">check_circle</span>
-                <div>
-                  <p className="font-semibold text-sm text-brand-green">Astuce #{i + 1}</p>
-                  <p className="text-xs text-muted leading-relaxed">{tip}</p>
-                </div>
-              </div>
-            ))}
-          </section>
-        )}
-
-        {/* ── Warnings ── */}
-        {warnings.length > 0 && (
-          <section className="space-y-3">
-            <h3 className="text-base font-bold text-text px-1">Points de Vigilance</h3>
-            {warnings.map((w, i) => (
-              <div key={`warn-${i}`} className="bg-card border border-accent/20 rounded-xl p-4 flex gap-3 items-start">
-                <span className="material-symbols-outlined text-accent-dark mt-0.5">warning</span>
-                <p className="text-xs text-muted leading-relaxed">{w}</p>
-              </div>
-            ))}
-          </section>
-        )}
-
-        {/* ── CTAs ── */}
-        <div className="pt-2 space-y-3">
-          <button className="btn-primary" onClick={onNewProject}>
-            <span className="material-symbols-outlined">add_circle</span>
-            Nouvelle estimation
-          </button>
-          <button
-            className="btn-secondary w-full"
-            onClick={() => alert("Fonctionnalité d'envoi d'email à venir !")}
-          >
-            <span className="material-symbols-outlined">mail</span>
-            Recevoir mon devis par email
-          </button>
-        </div>
-
-        {/* ── Footer ── */}
-        <footer className="flex flex-col items-center justify-center w-full px-4 space-y-2 mt-6">
-          <p className="text-[10px] uppercase tracking-widest text-center text-muted">
-            Données vérifiées par des professionnels agréés | 2026
-          </p>
-          <div className="flex gap-4">
-            <span className="text-[10px] uppercase tracking-widest text-muted hover:text-primary cursor-pointer transition-colors">Security</span>
-            <span className="text-[10px] uppercase tracking-widest text-muted hover:text-primary cursor-pointer transition-colors">Terms</span>
           </div>
-        </footer>
+
+          {/* Right Column: Materials & Actions */}
+          <div className="space-y-6">
+            
+            {/* Primary Action Panel */}
+            <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-4">
+              <SectionLabel>Actions du projet</SectionLabel>
+              
+              <button
+                onClick={handleShare}
+                className="w-full flex items-center justify-center gap-2 p-3.5 bg-[#25D366] hover:bg-[#20ba59] text-white rounded-lg text-sm font-bold transition-all hover:scale-[1.01] active:scale-[0.98] cursor-pointer shadow-md"
+              >
+                <span className="material-symbols-outlined text-lg">share</span>
+                Partager mon estimation WhatsApp
+              </button>
+
+              {emailStatus === 'success' ? (
+                <div className="p-3 bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] rounded-lg text-xs font-semibold text-center flex items-center justify-center gap-2">
+                  <span className="material-symbols-outlined text-base">check_circle</span>
+                  Rapport envoyé par e-mail !
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setEmailStatus('success');
+                    setTimeout(() => setEmailStatus(null), 5000);
+                  }}
+                  className="w-full btn-secondary text-sm"
+                >
+                  <span className="material-symbols-outlined text-lg">mail</span>
+                  Recevoir mon rapport par e-mail
+                </button>
+              )}
+
+              <button
+                onClick={onNewProject}
+                className="w-full btn-ghost text-sm"
+              >
+                <span className="material-symbols-outlined text-lg">add_circle</span>
+                Nouvelle estimation
+              </button>
+            </div>
+
+            {/* Critical validation issues warning card */}
+            {criticalIssues.length > 0 && (
+              <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-3">
+                <div className="flex items-center gap-2 text-[var(--danger)]">
+                  <span className="material-symbols-outlined">warning</span>
+                  <h4 className="font-['Manrope'] font-bold text-sm">Contraintes géotechniques</h4>
+                </div>
+                
+                <div className="space-y-3 mt-3">
+                  {criticalIssues.map((issue, i) => (
+                    <div
+                      key={`issue-${i}`}
+                      className="p-3 bg-[var(--danger-bg)] border border-[var(--danger)]/15 rounded-lg space-y-1.5"
+                    >
+                      <p className="text-xs text-white font-semibold leading-normal">{issue.message_fr}</p>
+                      {issue.suggested_fix && (
+                        <p className="text-[10px] text-[var(--text-secondary)] leading-relaxed italic">
+                          💡 Correction conseillée : {issue.suggested_fix}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Recommended Materials */}
+            {materials && (
+              <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-4">
+                <div>
+                  <h3 className="font-['Manrope'] font-bold text-base text-white">Recommandations matériaux</h3>
+                  <p className="text-xs text-[var(--text-muted)] mt-0.5">Adapté au niveau de finition sélectionné.</p>
+                </div>
+
+                <div className="bg-[var(--bg-surface-3)] border border-[var(--border-subtle)] rounded-xl p-4 flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center bg-[var(--bg-surface-high)] ${packageInfo.color}`}>
+                    <span className="material-symbols-outlined">{packageInfo.icon}</span>
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-white">Pack {materials.package_level || 'Standard'}</h4>
+                    <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{materials.description}</p>
+                  </div>
+                </div>
+
+                {grosOeuvresMats.length > 0 && (
+                  <div className="space-y-2">
+                    <h5 className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Structure (Gros Œuvres)</h5>
+                    {grosOeuvresMats.map((item, i) => (
+                      <div key={`go-${i}`} className="bg-[var(--bg-surface-3)] border border-[var(--border-subtle)] rounded-xl p-3 flex items-start gap-3">
+                        <span className="material-symbols-outlined text-[var(--orange)] text-base mt-0.5">home_repair_service</span>
+                        <div className="flex-1">
+                          <p className="font-bold text-xs text-white">{item.category}</p>
+                          <p className="text-xs text-[var(--text-secondary)] mt-0.5">{item.material}</p>
+                          {item.note && <p className="text-[9px] text-[var(--text-muted)] mt-1 italic leading-normal">{item.note}</p>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {finitionMats.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-[var(--border-subtle)]">
+                    <h5 className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Second Œuvre & Finition</h5>
+                    {finitionMats.map((item, i) => (
+                      <div key={`fin-${i}`} className="bg-[var(--bg-surface-3)] border border-[var(--border-subtle)] rounded-xl p-3 flex items-start gap-3">
+                        <span className="material-symbols-outlined text-[var(--orange)] text-base mt-0.5">palette</span>
+                        <div className="flex-1">
+                          <p className="font-bold text-xs text-white">{item.category}</p>
+                          <p className="text-xs text-[var(--text-secondary)] mt-0.5">{item.material}</p>
+                          {item.note && <p className="text-[9px] text-[var(--text-muted)] mt-1 italic leading-normal">{item.note}</p>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Seismic & Climate regulatory details */}
+            {((planData?.data?.material_recommendations?.seismic_requirements?.length > 0 || materials?.seismic_requirements?.length > 0) ||
+             (planData?.data?.material_recommendations?.climate_requirements?.length > 0 || materials?.climate_requirements?.length > 0)) && (
+              <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-4">
+                <SectionLabel>Conformité technique & RPA 99</SectionLabel>
+                
+                {/* Seismic rules */}
+                {(planData?.data?.material_recommendations?.seismic_requirements || materials?.seismic_requirements || []).length > 0 && (
+                  <div className="space-y-2">
+                    <h5 className="text-[10px] font-bold text-[var(--danger)] uppercase tracking-wider">Exigences Para-sismiques</h5>
+                    <ul className="space-y-1.5">
+                      {(planData?.data?.material_recommendations?.seismic_requirements || materials?.seismic_requirements || []).map((req, i) => (
+                        <li key={i} className="text-xs text-[var(--text-secondary)] flex items-start gap-1.5 leading-normal">
+                          <span className="text-[var(--danger)] font-bold">•</span>
+                          <span>{req}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Climate rules */}
+                {(planData?.data?.material_recommendations?.climate_requirements || materials?.climate_requirements || []).length > 0 && (
+                  <div className="space-y-2 pt-2 border-t border-[var(--border-subtle)]">
+                    <h5 className="text-[10px] font-bold text-[var(--info)] uppercase tracking-wider">Isolation & Climat</h5>
+                    <ul className="space-y-1.5">
+                      {(planData?.data?.material_recommendations?.climate_requirements || materials?.climate_requirements || []).map((req, i) => (
+                        <li key={i} className="text-xs text-[var(--text-secondary)] flex items-start gap-1.5 leading-normal">
+                          <span className="text-[var(--info)] font-bold">•</span>
+                          <span>{req}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Expert tips card */}
+            {tips.length > 0 && (
+              <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-3">
+                <SectionLabel>Conseils d'optimisation financière</SectionLabel>
+                <div className="space-y-3">
+                  {tips.map((tip, i) => (
+                    <div key={`tip-${i}`} className="flex gap-3 items-start border-b border-[var(--border-subtle)] pb-3 last:border-0 last:pb-0">
+                      <span className="material-symbols-outlined text-[var(--success)] mt-0.5 filled">check_circle</span>
+                      <div>
+                        <p className="text-xs font-bold text-white mb-0.5">Optimisation #{i + 1}</p>
+                        <p className="text-xs text-[var(--text-secondary)] leading-relaxed">{tip}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Warnings list */}
+            {warnings.length > 0 && (
+              <div className="bg-[var(--bg-surface)] border border-[var(--border-subtle)] rounded-2xl p-6 space-y-3">
+                <SectionLabel>Points de vigilance</SectionLabel>
+                <div className="space-y-2">
+                  {warnings.map((w, i) => (
+                    <div key={`warn-${i}`} className="bg-[var(--warning-bg)] border border-[var(--warning)]/15 rounded-lg p-3 flex gap-2 items-start">
+                      <span className="material-symbols-outlined text-[var(--warning)] text-base mt-0.5">warning</span>
+                      <p className="text-xs text-[var(--text-primary)] leading-normal">{w}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </main>
+      </div>
     </div>
   )
 }

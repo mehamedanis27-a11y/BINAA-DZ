@@ -32,6 +32,18 @@ from .material_engine import get_material_recommendations
 router = APIRouter()
 
 
+@router.get("/admin/reload-pricing", summary="Recharger les taux de construction")
+async def reload_pricing():
+    from .cost_engine import load_pricing_config
+    load_pricing_config.cache_clear()
+    config = load_pricing_config()
+    return {
+        "status": "success", 
+        "message": "Configuration pricing rechargée", 
+        "version": config.get("version"),
+        "last_updated": config.get("last_updated")
+    }
+
 @router.post(
     "/generate",
     response_model=GenerateResponse,
@@ -47,13 +59,8 @@ async def generate_plan_endpoint(request: GenerateRequest):
     Executes the 8-module pipeline in strict order.
     """
 
-    # ── M0 + M1: SITE ANALYSIS (single call, reused for feasibility gate) ──
-    site = analyze_site(
-        request.terrain_width,
-        request.terrain_depth,
-        request.street_orientation,
-        request.wilaya,
-    )
+    # ── M0 + M1: SITE ANALYSIS ──
+    site = analyze_site(request)
 
     blockers = check_feasibility(
         site,
@@ -75,18 +82,12 @@ async def generate_plan_endpoint(request: GenerateRequest):
         )
 
     # ── M3: STRUCTURAL GRID ───────────────────────────────────
-    grid = generate_structural_grid(
-        effective_width=site.effective_width_m,
-        effective_depth=site.effective_depth_m,
-        seismic_zone=site.seismic_zone,
-        floors=request.floors,
-        future_floors=request.future_floors,
-    )
+    grid = generate_structural_grid(request)
 
     # ── M2: PLAN GENERATION ───────────────────────────────────
     floor_outputs, plan_summary, gen_warnings = generate_plan(
-        effective_width=site.effective_width_m,
-        effective_depth=site.effective_depth_m,
+        effective_width=site.built_width_m,
+        effective_depth=site.built_depth_m,
         family_size=request.family_size,
         generations=request.generations,
         independent_generations=request.independent_generations,
@@ -94,50 +95,23 @@ async def generate_plan_endpoint(request: GenerateRequest):
         car_count=request.car_count,
         guest_frequency=request.guest_frequency,
         floors=request.floors,
-        future_floors=request.future_floors,
+        future_floors=request.floors,
         budget=request.budget,
         grid=grid,
-        solar_priority=site.solar_priority_orientation,
-        street_orientation=request.street_orientation,
+        solar_priority="S",
+        street_orientation="N",
         wilaya_name=site.wilaya_name,
         seismic_zone=site.seismic_zone,
         climate_zone=site.climate_zone,
     )
 
     # Patch summary fields that need site data
-    plan_summary.terrain_area_m2 = site.terrain_area_m2
-    plan_summary.setback_loss_percent = site.setback_loss_percent
+    plan_summary.built_area_m2 = site.built_area_m2
 
     # ── M8: COST ENGINE ───────────────────────────────────────
-    # Compute wet room count from generated floor plan
-    wet_rooms = sum(
-        1 for floor in floor_outputs
-        for room in floor.rooms
-        if room.room_type in {
-            "cuisine", "sdb_principale", "sdb_enfants",
-            "wc_separe", "wc_invites", "buanderie"
-        }
-    )
-    wet_rooms = max(wet_rooms, 2)  # minimum 2 wet rooms always
-
     cost_estimate = calculate_cost(
-        footprint_m2=site.effective_area_m2,
-        floors=request.floors,
-        future_floors=request.future_floors,
-        wilaya=request.wilaya,
-        seismic_zone=site.seismic_zone,
-        budget=request.budget,
-        terrain_width=request.terrain_width,
-        terrain_depth=request.terrain_depth,
-        finish_level=request.finish_level,
-        soil_category=request.soil_category,
-        slope_category=request.slope_category,
-        roof_type=request.roof_type,
-        vrd_aep=request.vrd_aep,
-        vrd_elec=request.vrd_elec,
-        vrd_gaz=request.vrd_gaz,
-        vrd_assainissement=request.vrd_assainissement,
-        wet_rooms=wet_rooms,
+        site_analysis=site,
+        request=request,
     )
 
     # ── M7: VALIDATION ────────────────────────────────────────
@@ -145,7 +119,7 @@ async def generate_plan_endpoint(request: GenerateRequest):
         floors=floor_outputs,
         seismic_zone=site.seismic_zone,
         climate_zone=site.climate_zone,
-        max_span_m=grid.max_span,
+        max_span_m=grid.max_span_m,
         has_car=request.has_car,
         guest_frequency=request.guest_frequency,
         soil_category=request.soil_category,
@@ -174,7 +148,7 @@ async def generate_plan_endpoint(request: GenerateRequest):
     response_data = GenerateResponseData(
         input_params=request.model_dump(),
         site_analysis=site,
-        structural_grid=grid.to_output(),
+        structural_grid=grid,
         summary=plan_summary,
         floors=floor_outputs,
         validation=validation,

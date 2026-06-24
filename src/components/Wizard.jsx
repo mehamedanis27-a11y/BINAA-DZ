@@ -1,5 +1,9 @@
-import { useState, useCallback } from 'react'
+import React, { useState, useCallback } from 'react'
 import ResultsScreen from './ResultsScreen'
+import TopAppBar from './TopAppBar'
+import NavSidebar from './NavSidebar'
+import { SVGDefs, IconR0, IconR1, IconR2, IconFlat, IconSteep, IconRock, IconUnknown, IconRoofFlat, IconRoofTiled } from './VisualIcons'
+import BottomTabBar from './BottomTabBar'
 
 /* ============================================================
    Wizard — BINAA User Input Wizard (Architectural-Tech UI)
@@ -9,12 +13,12 @@ import ResultsScreen from './ResultsScreen'
    ============================================================ */
 
 const STEPS = [
-  { id: 'land',    label: 'Terrain',  icon: 'landscape' },
-  { id: 'budget',  label: 'Budget',   icon: 'payments' },
-  { id: 'build',   label: 'Volume',   icon: 'domain' },
-  { id: 'family',  label: 'Famille',  icon: 'family_restroom' },
-  { id: 'finishes',label: 'Finitions',icon: 'format_paint' },
-  { id: 'summary', label: 'Résumé',   icon: 'checklist' },
+  { id: 'land',      label: 'Surface & Localisation',   description: 'Renseignez les dimensions de votre emprise bâtiment et la localisation.' },
+  { id: 'budget',    label: 'Budget global',            description: 'Indiquez votre enveloppe financière globale en Dinars Algériens.' },
+  { id: 'volume',    label: 'Volume & Structure',       description: 'Définissez le nombre d\'étages et le type de toiture.' },
+  { id: 'family',    label: 'Famille & Privacité',      description: 'Adaptez le plan à la structure et aux besoins de votre famille.' },
+  { id: 'finitions', label: 'Finitions',                description: 'Choisissez le niveau de qualité des matériaux et finitions.' },
+  { id: 'summary',   label: 'Récapitulatif',            description: 'Vérifiez attentivement avant de lancer le calcul.' },
 ]
 
 const FLOOR_OPTIONS = [
@@ -87,20 +91,20 @@ const WILAYAS = [
 
 /* ── Validation rules ── */
 const VALIDATION = {
-  terrain_width: {
-    min: 5, max: 200,
+  built_width_m: {
+    min: 4, max: 100,
     messages: {
-      required: 'Veuillez entrer la largeur du terrain',
-      min: 'La largeur doit être d\'au moins 5 m',
-      max: 'La largeur ne peut pas dépasser 200 m',
+      required: 'Veuillez entrer la largeur du bâtiment',
+      min: 'La largeur minimum est de 4 mètres',
+      max: 'La largeur ne peut pas dépasser 100 m',
     }
   },
-  terrain_depth: {
-    min: 8, max: 200,
+  built_depth_m: {
+    min: 6, max: 100,
     messages: {
-      required: 'Veuillez entrer la profondeur du terrain',
-      min: 'La profondeur doit être d\'au moins 8 m',
-      max: 'La profondeur ne peut pas dépasser 200 m',
+      required: 'Veuillez entrer la profondeur du bâtiment',
+      min: 'La profondeur minimum est de 6 mètres',
+      max: 'La profondeur ne peut pas dépasser 100 m',
     }
   },
   wilaya: {
@@ -124,6 +128,36 @@ const VALIDATION = {
     }
   },
 }
+
+const SEISMIC_ZONES = {
+  '16':{ zone:'III',  label:'Forte',    cls:'badge-seismic-high'   },
+  '09':{ zone:'III',  label:'Forte',    cls:'badge-seismic-high'   },
+  '35':{ zone:'III',  label:'Forte',    cls:'badge-seismic-high'   },
+  '42':{ zone:'III',  label:'Forte',    cls:'badge-seismic-high'   },
+  '15':{ zone:'III',  label:'Forte',    cls:'badge-seismic-high'   },
+  '06':{ zone:'IIb',  label:'Moyenne+', cls:'badge-seismic-medium' },
+  '10':{ zone:'IIb',  label:'Moyenne+', cls:'badge-seismic-medium' },
+  '18':{ zone:'IIb',  label:'Moyenne+', cls:'badge-seismic-medium' },
+  '02':{ zone:'IIb',  label:'Moyenne+', cls:'badge-seismic-medium' },
+  '21':{ zone:'IIb',  label:'Moyenne+', cls:'badge-seismic-medium' },
+  '31':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '25':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '19':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '05':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '13':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '22':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '26':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '27':{ zone:'IIa',  label:'Moyenne',  cls:'badge-seismic-medium' },
+  '01':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+  '07':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+  '11':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+  '30':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+  '37':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+  '08':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+  '17':{ zone:'I',    label:'Faible',   cls:'badge-seismic-low'    },
+}
+const getSeismic = (code) =>
+  SEISMIC_ZONES[code] || { zone: 'IIa', label: 'Moyenne', cls: 'badge-seismic-medium' }
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 const API_URL  = `${API_BASE}/api/v1/generate`
@@ -171,13 +205,12 @@ function Hint({ icon, children }) {
 /* ============================================================
    WIZARD COMPONENT
    ============================================================ */
-export default function Wizard() {
+export default function Wizard({ onNavigate, lang, onLangChange }) {
   const [currentStep, setCurrentStep]   = useState(0)
   const [formData, setFormData]         = useState({
-    terrain_width: '',
-    terrain_depth: '',
+    built_width_m: '',
+    built_depth_m: '',
     wilaya:        '',
-    street_orientation: 'N',
     slope_category: 'flat',
     soil_category: 'compact',
     budget:      '',
@@ -186,9 +219,8 @@ export default function Wizard() {
     budget_includes_admin: false,
     budget_includes_furniture: false,
     floors:      null,
-    future_floors: 0,
     roof_type: 'terrasse_plate',
-    family_size: '',
+    family_size: '5',
     generations: 1,
     independent_generations: false,
     has_car: true,
@@ -215,30 +247,28 @@ export default function Wizard() {
     const stepErrors = {}
     switch (stepIndex) {
 
-      /* Step 0 validation: terrain dimensions + wilaya + new terrain fields */
+      /* Step 0 validation: built dimensions + wilaya + terrain fields */
       case 0: {
-        const w = parseFloat2(formData.terrain_width)
-        const d = parseFloat2(formData.terrain_depth)
+        const w = parseFloat2(formData.built_width_m)
+        const d = parseFloat2(formData.built_depth_m)
 
         if (!w)
-          stepErrors.terrain_width = VALIDATION.terrain_width.messages.required
-        else if (w < VALIDATION.terrain_width.min)
-          stepErrors.terrain_width = VALIDATION.terrain_width.messages.min
-        else if (w > VALIDATION.terrain_width.max)
-          stepErrors.terrain_width = VALIDATION.terrain_width.messages.max
+          stepErrors.built_width_m = VALIDATION.built_width_m.messages.required
+        else if (w < VALIDATION.built_width_m.min)
+          stepErrors.built_width_m = VALIDATION.built_width_m.messages.min
+        else if (w > VALIDATION.built_width_m.max)
+          stepErrors.built_width_m = VALIDATION.built_width_m.messages.max
 
         if (!d)
-          stepErrors.terrain_depth = VALIDATION.terrain_depth.messages.required
-        else if (d < VALIDATION.terrain_depth.min)
-          stepErrors.terrain_depth = VALIDATION.terrain_depth.messages.min
-        else if (d > VALIDATION.terrain_depth.max)
-          stepErrors.terrain_depth = VALIDATION.terrain_depth.messages.max
+          stepErrors.built_depth_m = VALIDATION.built_depth_m.messages.required
+        else if (d < VALIDATION.built_depth_m.min)
+          stepErrors.built_depth_m = VALIDATION.built_depth_m.messages.min
+        else if (d > VALIDATION.built_depth_m.max)
+          stepErrors.built_depth_m = VALIDATION.built_depth_m.messages.max
 
         if (!formData.wilaya)
           stepErrors.wilaya = VALIDATION.wilaya.messages.required
 
-        if (!formData.street_orientation)
-          stepErrors.street_orientation = "Sélectionnez l'orientation de la rue"
         if (!formData.slope_category)
           stepErrors.slope_category = "Sélectionnez l'état du terrain"
         if (!formData.soil_category)
@@ -313,10 +343,9 @@ export default function Wizard() {
 
   /* Payload builds complete input object for POST /api/v1/generate */
   const buildPayload = useCallback(() => ({
-    terrain_width:       parseFloat2(formData.terrain_width),
-    terrain_depth:       parseFloat2(formData.terrain_depth),
+    built_width_m:       parseFloat2(formData.built_width_m),
+    built_depth_m:       parseFloat2(formData.built_depth_m),
     wilaya:              formData.wilaya,
-    street_orientation:  formData.street_orientation || 'N',
     slope_category:      formData.slope_category     || 'flat',
     soil_category:       formData.soil_category      || 'compact',
     vrd_aep:             formData.vrd_aep,
@@ -329,7 +358,6 @@ export default function Wizard() {
     budget_includes_admin:     formData.budget_includes_admin,
     budget_includes_furniture: formData.budget_includes_furniture,
     floors:              formData.floors,
-    future_floors:       formData.future_floors ?? 0,
     roof_type:           formData.roof_type          || 'terrasse_plate',
     family_size:         typeof formData.family_size === 'string'
                            ? parseFormattedNumber(formData.family_size)
@@ -367,13 +395,12 @@ export default function Wizard() {
               finish_level:        'Niveau de finitions',
               slope_category:      'État du terrain',
               soil_category:       'Type de sol',
-              street_orientation:  'Orientation de la rue',
               guest_frequency:     'Fréquence des invités',
               has_car:             'Véhicule',
               generations:         'Nombre de générations',
               roof_type:           'Type de toiture',
-              terrain_width:       'Largeur du terrain',
-              terrain_depth:       'Profondeur du terrain',
+              built_width_m:       'Largeur bâtiment',
+              built_depth_m:       'Profondeur bâtiment',
               wilaya:              'Wilaya',
               budget:              'Budget',
               floors:              'Étages',
@@ -409,10 +436,9 @@ export default function Wizard() {
 
   const startNewProject = useCallback(() => {
     setFormData({
-      terrain_width: '',
-      terrain_depth: '',
+      built_width_m: '',
+      built_depth_m: '',
       wilaya:        '',
-      street_orientation: 'N',
       slope_category: 'flat',
       soil_category: 'compact',
       budget:      '',
@@ -421,9 +447,8 @@ export default function Wizard() {
       budget_includes_admin: false,
       budget_includes_furniture: false,
       floors:      null,
-      future_floors: 0,
       roof_type: 'terrasse_plate',
-      family_size: '',
+      family_size: '5',
       generations: 1,
       independent_generations: false,
       has_car: true,
@@ -444,9 +469,9 @@ export default function Wizard() {
   const dismissError = useCallback(() => { setStatus(null); setErrorMessage('') }, [])
 
   /* ── Derived display values ── */
-  const widthValue   = parseFloat2(formData.terrain_width)
-  const depthValue   = parseFloat2(formData.terrain_depth)
-  const terrainArea  = widthValue > 0 && depthValue > 0
+  const widthValue   = parseFloat2(formData.built_width_m)
+  const depthValue   = parseFloat2(formData.built_depth_m)
+  const builtArea    = widthValue > 0 && depthValue > 0
     ? (widthValue * depthValue).toFixed(1)
     : null
   const budgetValue  = typeof formData.budget === 'string'
@@ -465,737 +490,593 @@ export default function Wizard() {
         planData={planData}
         userBudget={budgetValue}
         onNewProject={startNewProject}
+        onNavigate={onNavigate}
+        lang={lang}
+        onLangChange={onLangChange}
       />
     )
   }
 
-  /* ════════════════════════════════════════════════
+      /* ════════════════════════════════════════════════
      RENDER
      ════════════════════════════════════════════════ */
   return (
-    <>
-      {/* ── Sticky Header (unchanged) ── */}
-      <header className="sticky top-0 z-50 bg-bg/90 backdrop-blur-md px-5 py-4 flex items-center justify-between border-b border-border-light">
-        <h1 className="text-xl font-bold tracking-tight text-primary">
-          BINAA
-        </h1>
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-muted uppercase tracking-wider">Étape</span>
-          <span className="text-sm font-bold text-primary">
-            {currentStep + 1}/{STEPS.length}
-          </span>
-        </div>
-      </header>
-
-      {/* ── Progress Bar (unchanged) ── */}
-      <div className="h-[3px] w-full bg-border-light">
-        <div
-          className="h-full bg-primary rounded-r-full transition-all duration-500"
-          style={{ width: `${progressPercent}%` }}
-        />
-      </div>
-
-      {/* ── Main ── */}
-      <main className="flex-1 px-5 pt-6 pb-8 flex flex-col max-w-lg mx-auto w-full">
-
-        {/* ═══ STEP 1 — Terrain ═══
-            Step 1 collects all terrain parameters */}
-        {currentStep === 0 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-land">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-text tracking-tight">
-                Votre terrain
-              </h2>
-              <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Entrez les dimensions exactes et la localisation de votre terrain.
-              </p>
-            </div>
-
-            {/* Width + Depth — side by side */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div>
-                <SectionLabel>Largeur (m) — façade rue</SectionLabel>
-                <input
-                  id="terrain_width"
-                  className={`input-field ${errors.terrain_width ? 'has-error' : ''}`}
-                  type="number"
-                  inputMode="decimal"
-                  placeholder="Ex: 10"
-                  min="5"
-                  max="200"
-                  step="0.5"
-                  value={formData.terrain_width}
-                  onChange={e => updateField('terrain_width', e.target.value)}
-                  autoFocus
-                />
-                <ErrorMsg message={errors.terrain_width} />
-              </div>
-
-              <div>
-                <SectionLabel>Profondeur (m)</SectionLabel>
-                <input
-                  id="terrain_depth"
-                  className={`input-field ${errors.terrain_depth ? 'has-error' : ''}`}
-                  type="number"
-                  inputMode="decimal"
-                  placeholder="Ex: 15"
-                  min="8"
-                  max="200"
-                  step="0.5"
-                  value={formData.terrain_depth}
-                  onChange={e => updateField('terrain_depth', e.target.value)}
-                />
-                <ErrorMsg message={errors.terrain_depth} />
+    <div className="min-h-dvh bg-bg-base flex flex-col text-text-primary">
+      <SVGDefs />
+      <TopAppBar activePage="wizard" onNavigate={onNavigate} authenticated={true} lang={lang} onLangChange={onLangChange} />
+      <NavSidebar activePage="wizard" onNavigate={onNavigate} onNewEstimation={startNewProject} />
+      
+      <div className="flex-1 w-full pb-32 flex justify-center items-start px-4 layout-content layout-sidebar-offset">
+        <main className="w-full max-w-3xl mt-6 bg-bg-surface border border-border-subtle rounded-2xl p-6 lg:p-10 shadow-xl relative flex flex-col animate-fade-in h-auto">
+          {/* ── Header & Progress ── */}
+          <header className="mb-8 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-display font-bold text-text-primary">Configuration du Projet</h2>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-muted uppercase tracking-wider">Étape</span>
+                <span className="text-sm font-bold text-orange">{currentStep + 1} / {STEPS.length}</span>
               </div>
             </div>
-
-            {/* Live area preview */}
-            {terrainArea && (
-              <div className="mb-4 p-4 bg-card border border-border rounded-xl">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium text-muted">Surface calculée</span>
-                  <span className="text-xl font-bold text-primary">
-                    {terrainArea} m²
-                  </span>
-                </div>
-                <div className="flex justify-between items-center mt-1">
-                  <span className="text-xs text-muted">
-                    {widthValue} m × {depthValue} m
-                  </span>
-                  {parseFloat(terrainArea) < 80 && (
-                    <span className="text-xs text-amber-500 font-medium">Terrain étroit</span>
-                  )}
-                  {parseFloat(terrainArea) >= 300 && (
-                    <span className="text-xs text-emerald-500 font-medium">Grand terrain</span>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Wilaya selector */}
-            <div className="mb-2">
-              <SectionLabel>Wilaya</SectionLabel>
-              <div className="relative">
-                <select
-                  id="wilaya"
-                  className={`input-field appearance-none pr-10 ${errors.wilaya ? 'has-error' : ''}`}
-                  value={formData.wilaya}
-                  onChange={e => updateField('wilaya', e.target.value)}
-                  style={{ backgroundImage: 'none' }}
-                >
-                  <option value="">— Sélectionnez votre wilaya —</option>
-                  {WILAYAS.map(w => (
-                    <option key={w.code} value={w.code}>
-                      {w.code} — {w.name}
-                    </option>
-                  ))}
-                </select>
-                {/* Chevron icon */}
-                <span
-                  className="material-symbols-outlined text-muted pointer-events-none"
-                  style={{
-                    position: 'absolute', right: 12, top: '50%',
-                    transform: 'translateY(-50%)', fontSize: 20,
-                  }}
-                >
-                  expand_more
-                </span>
-              </div>
-              <ErrorMsg message={errors.wilaya} />
-            </div>
-
-            {/* Wilaya context pill */}
-            {wilayaLabel && (
-              <div className="mt-3 flex items-center gap-2 text-xs text-muted">
-                <span className="material-symbols-outlined text-primary text-base">location_on</span>
-                <span>
-                  Zone détectée automatiquement pour{' '}
-                  <strong className="text-text">{wilayaLabel.name}</strong>
-                  {' '}— tarifs et sismicité régionaux appliqués.
-                </span>
-              </div>
-            )}
-
-            {/* ── NEW v2.1: Orientation, Slope, Soil ── */}
-            <div className="mt-6 space-y-5">
-              <div>
-                <SectionLabel>Orientation de la façade (Rue)</SectionLabel>
-                <div className="grid grid-cols-4 gap-2">
-                  {['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'].map(dir => (
-                    <button
-                      key={dir}
-                      type="button"
-                      className={`p-2 rounded-lg border text-sm font-bold transition-colors ${
-                        formData.street_orientation === dir
-                          ? 'border-primary bg-primary/10 text-primary'
-                          : 'border-border text-muted hover:border-muted'
-                      }`}
-                      onClick={() => updateField('street_orientation', dir)}
-                    >
-                      {dir}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <SectionLabel>Inclinaison du terrain</SectionLabel>
-                <div className="flex gap-2">
-                  {[
-                    { val: 'flat', label: 'Plat' },
-                    { val: 'slight', label: 'Légère pente' },
-                    { val: 'steep', label: 'Forte pente' }
-                  ].map(opt => (
-                    <button
-                      key={opt.val} type="button"
-                      className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
-                        formData.slope_category === opt.val ? 'border-primary bg-primary/10 text-primary font-bold' : 'border-border text-muted'
-                      }`}
-                      onClick={() => updateField('slope_category', opt.val)}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <SectionLabel>Type de sol</SectionLabel>
-                <select
-                  className="input-field appearance-none"
-                  value={formData.soil_category}
-                  onChange={e => updateField('soil_category', e.target.value)}
-                >
-                  <option value="compact">Sol compact (Standard)</option>
-                  <option value="rocky">Rocheux (Solide)</option>
-                  <option value="soft">Meuble/Sablonneux (Fragile)</option>
-                  <option value="unknown">Inconnu (Sécurité max)</option>
-                </select>
-              </div>
-            </div>
-
-            <Hint icon="straighten">
-              Mesurez la façade sur rue (largeur) et la distance vers l'arrière (profondeur).
-            </Hint>
-
-            <div className="mt-auto pt-8">
-              <button className="btn-primary" onClick={goNext} type="button">
-                Continuer
-                <span className="material-symbols-outlined text-xl">arrow_forward</span>
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* ═══ STEP 2 — Budget (unchanged) ═══ */}
-        {currentStep === 1 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-budget">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-text tracking-tight">
-                Budget de construction
-              </h2>
-              <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Indiquez votre budget total en Dinars Algériens.
-              </p>
-            </div>
-
-            <SectionLabel>Budget (DA — Dinars Algériens)</SectionLabel>
-            <input
-              id="budget"
-              className={`input-field ${errors.budget ? 'has-error' : ''}`}
-              type="text"
-              inputMode="numeric"
-              placeholder="Ex: 15 000 000"
-              value={formData.budget}
-              onChange={(e) => {
-                const digits = e.target.value.replace(/\D/g, '')
-                updateField('budget', digits ? formatNumber(parseInt(digits, 10)) : '')
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && goNext()}
-              autoFocus
-            />
-            <ErrorMsg message={errors.budget} />
-
-            {budgetValue > 0 && (
-              <div className="mt-4 p-4 bg-primary rounded-xl text-white">
-                <p className="text-xs font-semibold text-accent-light uppercase tracking-wider mb-1">Interprétation</p>
-                <p className="text-sm opacity-90 leading-relaxed">
-                  {budgetValue < 5_000_000
-                    ? 'Budget serré — plan optimisé avec finitions économiques.'
-                    : budgetValue < 15_000_000
-                      ? 'Budget modéré — maison standard avec bonnes finitions.'
-                      : budgetValue < 30_000_000
-                        ? 'Bon budget — maison spacieuse avec finitions de qualité.'
-                        : 'Budget confortable — maison premium avec prestations haut de gamme.'}
-                </p>
-              </div>
-            )}
-
-            {!errors.budget && (
-              <Hint>Budget moyen : 10 000 000 à 30 000 000 DA</Hint>
-            )}
-
-            {/* ── NEW v2.1: Budget Scope Checkboxes ── */}
-            <div className="mt-6">
-              <SectionLabel>Ce budget inclut-il déjà :</SectionLabel>
-              <div className="space-y-2 mt-2">
-                {[
-                  { field: 'budget_includes_land', label: "L'achat du terrain" },
-                  { field: 'budget_includes_architect', label: "Frais d'architecte et d'étude" },
-                  { field: 'budget_includes_admin', label: "Frais administratifs (Permis, etc.)" },
-                  { field: 'budget_includes_furniture', label: "Ameublement / Décoration" }
-                ].map(item => (
-                  <label key={item.field} className="flex items-center gap-3 p-2 rounded-lg border border-border hover:bg-card-alt cursor-pointer transition-colors">
-                    <input
-                      type="checkbox"
-                      className="w-5 h-5 accent-primary rounded"
-                      checked={formData[item.field]}
-                      onChange={(e) => updateField(item.field, e.target.checked)}
-                    />
-                    <span className="text-sm text-text">{item.label}</span>
-                  </label>
-                ))}
-              </div>
-              <p className="text-xs text-muted mt-2">
-                Nous déduirons ces montants pour isoler le budget <strong className="text-text">exclusivement dédié à la construction</strong>.
-              </p>
-            </div>
-
-            <div className="mt-auto pt-8 flex gap-3">
-              <button className="btn-secondary px-5" onClick={goBack} type="button">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </button>
-              <button className="btn-primary flex-1" onClick={goNext} type="button">
-                Continuer
-                <span className="material-symbols-outlined text-xl">arrow_forward</span>
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* ═══ STEP 3 — Volume ═══ */}
-        {currentStep === 2 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-build">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-text tracking-tight">
-                Volume de construction
-              </h2>
-              <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Définissez les étages et la toiture.
-              </p>
-            </div>
-
-            <SectionLabel>Étages à construire immédiatement</SectionLabel>
-            <div className="space-y-3 mb-6">
-              {FLOOR_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`w-full p-4 bg-card rounded-xl flex items-center gap-4 transition-all active:scale-[0.98] border ${
-                    formData.floors === option.value
-                      ? 'border-primary shadow-md ring-1 ring-primary/15'
-                      : 'border-border hover:border-muted'
-                  }`}
-                  onClick={() => updateField('floors', option.value)}
-                >
-                  <div className={`w-12 h-12 rounded-lg flex items-center justify-center transition-colors ${
-                    formData.floors === option.value
-                      ? 'bg-primary/10 text-primary'
-                      : 'bg-card-alt text-muted'
-                  }`}>
-                    <span className="material-symbols-outlined">{option.icon}</span>
-                  </div>
-                  <div className="text-left flex-1">
-                    <div className="font-bold text-text">{option.label}</div>
-                    <div className="text-xs text-muted">{option.subtitle}</div>
-                  </div>
-                  {formData.floors === option.value && (
-                    <span className="material-symbols-outlined text-primary filled">check_circle</span>
-                  )}
-                </button>
+            
+            <div className="flex items-center gap-2">
+              {STEPS.map((step, i) => (
+                <React.Fragment key={step.id}>
+                  <div 
+                    className={`flex-1 h-2 rounded-full transition-all duration-300 ${
+                      i < currentStep ? 'bg-teal' :
+                      i === currentStep ? 'bg-orange animate-pulse-glow' : 'bg-bg-surface-3'
+                    }`}
+                  />
+                </React.Fragment>
               ))}
             </div>
-            <ErrorMsg message={errors.floors} />
+          </header>
 
+          <div className="flex-1">
             <div className="mb-6">
-              <SectionLabel>Étages futurs prévus (Extension)</SectionLabel>
-              <div className="flex gap-2 mt-2">
-                {[0, 1, 2, 3, 4].map(num => (
-                  <button
-                    key={num} type="button"
-                    className={`flex-1 p-2 rounded-lg border text-sm font-bold transition-colors ${
-                      formData.future_floors === num ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:border-muted'
-                    }`}
-                    onClick={() => updateField('future_floors', num)}
-                  >
-                    +{num}
-                  </button>
-                ))}
-              </div>
-              <p className="text-xs text-muted mt-2">
-                Le rez-de-chaussée sera pré-dimensionné (poteaux, fondations) pour supporter ces étages.
-              </p>
+              <h3 className="text-2xl font-display font-bold mb-2 flex items-center gap-3">
+                <span className="material-symbols-outlined text-orange text-3xl">{STEPS[currentStep].icon}</span>
+                {STEPS[currentStep].label}
+              </h3>
             </div>
 
-            <div className="mb-2">
-              <SectionLabel>Type de toiture</SectionLabel>
-              <div className="flex gap-2 mt-2">
-                {[
-                  { val: 'terrasse_plate', label: 'Terrasse Plate', icon: 'flatware' },
-                  { val: 'pitched', label: 'Inclinée (Tuiles)', icon: 'roofing' }
-                ].map(opt => (
-                  <button
-                    key={opt.val} type="button"
-                    className={`flex-1 p-3 flex flex-col items-center gap-1 rounded-lg border text-sm font-bold transition-colors ${
-                      formData.roof_type === opt.val ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:border-muted'
-                    }`}
-                    onClick={() => updateField('roof_type', opt.val)}
-                  >
-                    <span className="material-symbols-outlined">{opt.icon}</span>
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-auto pt-8 flex gap-3">
-              <button className="btn-secondary px-5" onClick={goBack} type="button">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </button>
-              <button className="btn-primary flex-1" onClick={goNext} type="button">
-                Continuer
-                <span className="material-symbols-outlined text-xl">arrow_forward</span>
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* ═══ STEP 4 — Famille ═══ */}
-        {currentStep === 3 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-family">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-text tracking-tight">
-                Famille & Style de vie
-              </h2>
-              <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Afin d'optimiser les espaces de vie et la privacité.
-              </p>
-            </div>
-
-            <div className="mb-4">
-              <SectionLabel>Nombre de membres</SectionLabel>
-              <input
-                id="family_size"
-                className={`input-field ${errors.family_size ? 'has-error' : ''}`}
-                type="text"
-                inputMode="numeric"
-                placeholder="Ex: 5"
-                value={formData.family_size}
-                onChange={(e) => updateField('family_size', e.target.value.replace(/\D/g, ''))}
-                autoFocus
-              />
-              <ErrorMsg message={errors.family_size} />
-            </div>
-
-            <div className="mb-4">
-              <SectionLabel>Générations sous le même toit</SectionLabel>
-              <div className="flex gap-2">
-                {[1, 2, 3].map(num => (
-                  <button
-                    key={num} type="button"
-                    className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
-                      formData.generations === num ? 'border-primary bg-primary/10 text-primary font-bold' : 'border-border text-muted hover:border-muted'
-                    }`}
-                    onClick={() => updateField('generations', num)}
-                  >
-                    {num} {num === 1 ? 'Génération' : 'Générations'}
-                  </button>
-                ))}
-              </div>
-              {formData.generations > 1 && (
-                <label className="flex items-center gap-2 mt-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="w-5 h-5 accent-primary rounded"
-                    checked={formData.independent_generations}
-                    onChange={(e) => updateField('independent_generations', e.target.checked)}
-                  />
-                  <span className="text-sm text-text">Entrée et cuisine indépendantes pour les parents/grands-parents</span>
-                </label>
-              )}
-            </div>
-
-            <div className="mb-4">
-              <SectionLabel>Nombre de véhicules (Garage)</SectionLabel>
-              <div className="flex gap-2">
-                {[0, 1, 2, 3].map(num => (
-                  <button
-                    key={num} type="button"
-                    className={`flex-1 p-2 rounded-lg border text-sm transition-colors ${
-                      formData.car_count === num ? 'border-primary bg-primary/10 text-primary font-bold' : 'border-border text-muted hover:border-muted'
-                    }`}
-                    onClick={() => updateField('car_count', num)}
-                  >
-                    {num === 0 ? 'Aucun' : num}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mb-2">
-              <SectionLabel>Fréquence de réception d'invités (Majlis)</SectionLabel>
-              <select
-                className="input-field appearance-none"
-                value={formData.guest_frequency}
-                onChange={e => updateField('guest_frequency', e.target.value)}
-              >
-                <option value="HIGH">Fréquente (Grand Majlis requis)</option>
-                <option value="MEDIUM">Moyenne (Majlis standard)</option>
-                <option value="LOW">Occasionnelle (Petit espace)</option>
-                <option value="NEVER">Jamais (Pas de salon séparé)</option>
-              </select>
-            </div>
-
-            <div className="mt-auto pt-8 flex gap-3">
-              <button className="btn-secondary px-5" onClick={goBack} type="button">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </button>
-              <button className="btn-primary flex-1" onClick={goNext} type="button">
-                Continuer
-                <span className="material-symbols-outlined text-xl">arrow_forward</span>
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* ═══ STEP 5 — Finitions & VRD ═══ */}
-        {currentStep === 4 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-finishes">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-text tracking-tight">
-                Finitions & Raccordements
-              </h2>
-              <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Précisez le niveau de finition et la viabilisation du terrain.
-              </p>
-            </div>
-
-            <div className="mb-6">
-              <SectionLabel>Niveau de finition souhaité</SectionLabel>
-              <div className="space-y-2 mt-2">
-                {[
-                  { val: 'economy', label: 'Économique', desc: 'Matériaux locaux standards' },
-                  { val: 'standard', label: 'Standard', desc: 'Bon rapport qualité/prix' },
-                  { val: 'premium', label: 'Premium', desc: 'Matériaux d\'importation, domotique' }
-                ].map(opt => (
-                  <button
-                    key={opt.val} type="button"
-                    className={`w-full p-3 rounded-lg border text-left flex flex-col transition-colors ${
-                      formData.finish_level === opt.val ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted hover:border-muted'
-                    }`}
-                    onClick={() => updateField('finish_level', opt.val)}
-                  >
-                    <span className="text-sm font-bold">{opt.label}</span>
-                    <span className="text-xs opacity-80">{opt.desc}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="mb-2">
-              <SectionLabel>Viabilisation existante (Réseaux urbains)</SectionLabel>
-              <div className="grid grid-cols-2 gap-3 mt-2">
-                {[
-                  { field: 'vrd_aep', label: 'Eau Potable' },
-                  { field: 'vrd_elec', label: 'Électricité' },
-                  { field: 'vrd_gaz', label: 'Gaz de ville' },
-                  { field: 'vrd_assainissement', label: 'Égouts' }
-                ].map(item => (
-                  <label key={item.field} className="flex items-center gap-2 p-2 rounded-lg border border-border hover:bg-card-alt cursor-pointer transition-colors">
-                    <input
-                      type="checkbox"
-                      className="w-5 h-5 accent-primary rounded"
-                      checked={formData[item.field]}
-                      onChange={(e) => updateField(item.field, e.target.checked)}
-                    />
-                    <span className="text-sm text-text">{item.label}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-auto pt-8 flex gap-3">
-              <button className="btn-secondary px-5" onClick={goBack} type="button">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </button>
-              <button className="btn-primary flex-1" onClick={goNext} type="button">
-                Continuer
-                <span className="material-symbols-outlined text-xl">arrow_forward</span>
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* ═══ STEP 6 — Summary ═══ */}
-        {currentStep === 5 && (
-          <section className="flex flex-col flex-1 animate-step-in" key="step-summary">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-text tracking-tight">
-                Récapitulatif
-              </h2>
-              <p className="text-sm text-muted mt-1.5 leading-relaxed">
-                Vérifiez vos informations, puis lancez le calcul.
-              </p>
-            </div>
-
-            <div className="space-y-3">
-
-              {/* Terrain */}
-              <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-start">
-                <div>
-                  <div className="text-[10px] text-muted uppercase tracking-wider font-medium">
-                    Terrain
+            {/* Step 0: Terrain */}
+            {currentStep === 0 && (
+              <div className="space-y-8 animate-step-in">
+                {/* Dimensions */}
+                <div className="glass-card p-6">
+                  <SectionLabel>Dimensions de l'emprise bâtiment (m)</SectionLabel>
+                  <p className="text-xs text-text-muted mb-4">Entrez les dimensions de votre emprise bâtiment (déjà calculée sans retraits)</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <input
+                        type="number"
+                        className={`input-field mono ${errors.built_width_m ? 'error' : ''}`}
+                        placeholder="Largeur (ex: 10)"
+                        value={formData.built_width_m}
+                        onChange={e => updateField('built_width_m', e.target.value)}
+                      />
+                      <ErrorMsg message={errors.built_width_m} />
+                    </div>
+                    <div>
+                      <input
+                        type="number"
+                        className={`input-field mono ${errors.built_depth_m ? 'error' : ''}`}
+                        placeholder="Profondeur (ex: 15)"
+                        value={formData.built_depth_m}
+                        onChange={e => updateField('built_depth_m', e.target.value)}
+                      />
+                      <ErrorMsg message={errors.built_depth_m} />
+                    </div>
                   </div>
-                  <div className="font-bold text-text">
-                    {widthValue} m × {depthValue} m
-                    <span className="text-muted font-normal text-sm ml-2">
-                      = {terrainArea} m²
-                    </span>
-                  </div>
-                  {wilayaLabel && (
-                    <div className="text-xs text-muted mt-0.5">
-                      Wilaya {wilayaLabel.code} — {wilayaLabel.name}
+                  {builtArea && (
+                    <div className="mt-4 p-3 bg-bg-surface-4 rounded-md border border-border-subtle flex items-center justify-between">
+                      <span className="text-sm text-text-secondary">Surface construite au sol</span>
+                      <span className="font-mono font-bold text-orange text-lg">{builtArea} m²</span>
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => goToStep(0)}
-                  className="text-accent-dark hover:text-primary transition-colors p-1 mt-0.5"
-                >
-                  <span className="material-symbols-outlined text-xl">edit</span>
-                </button>
-              </div>
 
-              {/* Budget (unchanged) */}
-              <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-                <div>
-                  <div className="text-[10px] text-muted uppercase tracking-wider font-medium">Budget</div>
-                  <div className="font-bold text-text">{formatNumber(budgetValue)} DA</div>
-                </div>
-                <button onClick={() => goToStep(1)} className="text-accent-dark hover:text-primary transition-colors p-1">
-                  <span className="material-symbols-outlined text-xl">edit</span>
-                </button>
-              </div>
-
-              {/* Floors (unchanged) */}
-              <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-                <div>
-                  <div className="text-[10px] text-muted uppercase tracking-wider font-medium">Étages</div>
-                  <div className="font-bold text-text">
-                    {floorLabel ? `${floorLabel.label} — ${floorLabel.description}` : '—'}
+                {/* Localisation */}
+                <div className="glass-card p-6">
+                  <SectionLabel>Localisation & Risques</SectionLabel>
+                  <div className="grid gap-4">
+                    <div>
+                      <select
+                        className={`input-field ${errors.wilaya ? 'error' : ''}`}
+                        value={formData.wilaya}
+                        onChange={e => updateField('wilaya', e.target.value)}
+                      >
+                        <option value="">Sélectionnez la wilaya (01-58)</option>
+                        {WILAYAS.map(w => (
+                          <option key={w.code} value={w.code}>
+                            {w.code} - {w.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ErrorMsg message={errors.wilaya} />
+                    </div>
+                    {wilayaLabel && (
+                      <div className="flex gap-2 mt-2">
+                        <span className={getSeismic(formData.wilaya).cls}>
+                          Sismique : Zone {getSeismic(formData.wilaya).zone} ({getSeismic(formData.wilaya).label})
+                        </span>
+                        <span className="badge-coastal">Climat : {wilayaLabel.name}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <button onClick={() => goToStep(2)} className="text-accent-dark hover:text-primary transition-colors p-1">
-                  <span className="material-symbols-outlined text-xl">edit</span>
-                </button>
-              </div>
 
-              {/* Family (unchanged) */}
-              <div className="bg-card border border-border rounded-xl p-4 flex justify-between items-center">
-                <div>
-                  <div className="text-[10px] text-muted uppercase tracking-wider font-medium">Famille</div>
-                  <div className="font-bold text-text">{familyValue} membres</div>
+                {/* Topographie */}
+                <div className="glass-card p-6">
+                  <SectionLabel>Topographie & Sol</SectionLabel>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-xs text-text-muted">État du terrain</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          className={`option-card items-center justify-center text-center p-4 ${formData.slope_category === 'flat' ? 'selected' : ''}`}
+                          onClick={() => updateField('slope_category', 'flat')}
+                        >
+                          <IconFlat className="w-10 h-10 mb-1" />
+                          <span className="opt-label">Plat</span>
+                        </button>
+                        <button
+                          className={`option-card items-center justify-center text-center p-4 ${formData.slope_category === 'steep' ? 'selected' : ''}`}
+                          onClick={() => updateField('slope_category', 'steep')}
+                        >
+                          <IconSteep className="w-10 h-10 mb-1" />
+                          <span className="opt-label">En pente</span>
+                        </button>
+                      </div>
+                      <ErrorMsg message={errors.slope_category} />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-text-muted">Type de sol</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          className={`option-card items-center justify-center text-center p-4 ${formData.soil_category === 'compact' ? 'selected' : ''}`}
+                          onClick={() => updateField('soil_category', 'compact')}
+                        >
+                          <IconRock className="w-10 h-10 mb-1" />
+                          <span className="opt-label">Dur / Rocheux</span>
+                        </button>
+                        <button
+                          className={`option-card items-center justify-center text-center p-4 ${formData.soil_category === 'unknown' ? 'selected' : ''}`}
+                          onClick={() => updateField('soil_category', 'unknown')}
+                        >
+                          <IconUnknown className="w-10 h-10 mb-1" />
+                          <span className="opt-label">Inconnu</span>
+                        </button>
+                      </div>
+                      <ErrorMsg message={errors.soil_category} />
+                    </div>
+                  </div>
                 </div>
-                <button onClick={() => goToStep(3)} className="text-accent-dark hover:text-primary transition-colors p-1">
-                  <span className="material-symbols-outlined text-xl">edit</span>
-                </button>
               </div>
+            )}
 
-              {/* Additional details */}
-              <div className="bg-card border border-border rounded-xl p-4">
-                <div className="text-[10px] text-muted uppercase tracking-wider font-medium mb-3">Détails supplémentaires</div>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted">Orientation rue</span>
-                    <span className="text-text font-medium">{formData.street_orientation || '—'}</span>
+            {/* Step 1: Budget */}
+            {currentStep === 1 && (
+              <div className="space-y-8 animate-step-in">
+                <div className="glass-card p-6">
+                  <SectionLabel>Enveloppe budgétaire globale (DZD)</SectionLabel>
+                  <div className="relative mt-2">
+                    <input
+                      type="text"
+                      className={`input-field mono text-2xl py-4 pl-12 ${errors.budget ? 'error' : ''}`}
+                      placeholder="Ex: 15 000 000"
+                      value={formatNumber(formData.budget)}
+                      onChange={e => {
+                        const raw = e.target.value.replace(/\D/g, '')
+                        updateField('budget', raw ? parseInt(raw, 10) : '')
+                      }}
+                    />
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted font-bold">DA</span>
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted">Pente terrain</span>
-                    <span className="text-text font-medium">{{flat:'Plat', slight:'Légère', steep:'Forte'}[formData.slope_category] || '—'}</span>
+                  <ErrorMsg message={errors.budget} />
+                  <Hint icon="lightbulb">Saisissez le montant total dont vous disposez. L'IA déduira les frais annexes si cochés ci-dessous.</Hint>
+                </div>
+
+                <div className="glass-card p-6">
+                  <SectionLabel>Le budget ci-dessus inclut-il :</SectionLabel>
+                  <div className="space-y-3 mt-4">
+                    {[
+                      { id: 'budget_includes_land', label: 'L\'achat du terrain (≈ 40%)' },
+                      { id: 'budget_includes_architect', label: 'Études architecte & génie civil (≈ 3%)' },
+                      { id: 'budget_includes_admin', label: 'Permis & démarches administratives (≈ 3%)' },
+                      { id: 'budget_includes_furniture', label: 'Ameublement & équipement (≈ 8%)' },
+                    ].map(item => (
+                      <label key={item.id} className="flex items-center gap-3 p-3 rounded-md border border-border-subtle hover:bg-bg-surface-4 cursor-pointer transition-colors">
+                        <input
+                          type="checkbox"
+                          className="w-5 h-5 accent-orange rounded bg-bg-surface-2 border-border-strong"
+                          checked={formData[item.id]}
+                          onChange={e => updateField(item.id, e.target.checked)}
+                        />
+                        <span className="text-sm font-medium text-text-primary">{item.label}</span>
+                      </label>
+                    ))}
                   </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted">Type de sol</span>
-                    <span className="text-text font-medium">{{rocky:'Rocheux', compact:'Compact', soft:'Meuble', unknown:'Inconnu'}[formData.soil_category] || '—'}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted">Toiture</span>
-                    <span className="text-text font-medium">{{terrasse_plate:'Terrasse plate', pitched:'En pente'}[formData.roof_type] || '—'}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted">Finitions</span>
-                    <span className="text-text font-medium">{{economy:'Économique', standard:'Moyen standing', premium:'Haut standing'}[formData.finish_level] || '—'}</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted">Invités</span>
-                    <span className="text-text font-medium">{{NEVER:'Jamais', LOW:'Rarement', MEDIUM:'Régulièrement', HIGH:'Souvent'}[formData.guest_frequency] || '—'}</span>
+
+                  <div className="mt-6 p-4 rounded-md bg-bg-surface-2 border-l-4 border-teal flex justify-between items-center">
+                    <div>
+                      <span className="block text-xs text-text-muted font-semibold uppercase">Budget net construction</span>
+                      <span className="text-xl font-mono font-bold text-teal">{formatNumber(computeConstructionBudget())} DA</span>
+                    </div>
                   </div>
                 </div>
               </div>
+            )}
 
-            </div>
+            {/* Step 2: Volume */}
+            {currentStep === 2 && (
+              <div className="space-y-8 animate-step-in">
+                <div className="glass-card p-6">
+                  <SectionLabel>Gabarit de la maison</SectionLabel>
+                  <div className="grid gap-3">
+                    {FLOOR_OPTIONS.map(opt => (
+                      <button
+                        key={opt.value}
+                        className={`option-card flex-row items-center p-4 gap-4 ${formData.floors === opt.value ? 'selected' : ''}`}
+                        onClick={() => updateField('floors', opt.value)}
+                      >
+                        <div className="w-12 h-12 flex items-center justify-center flex-shrink-0">
+                          {opt.value === 0 && <IconR0 className="w-12 h-12" />}
+                          {opt.value === 1 && <IconR1 className="w-12 h-12" />}
+                          {opt.value === 2 && <IconR2 className="w-12 h-12" />}
+                        </div>
+                        <div className="flex-1 text-left">
+                          <div className="font-bold text-lg text-text-primary">{opt.label}</div>
+                          <div className="text-sm text-text-secondary">{opt.description}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                  <ErrorMsg message={errors.floors} />
+                </div>
 
-            <div className="mt-auto pt-8 flex gap-3">
-              <button className="btn-secondary px-5" onClick={goBack} type="button">
-                <span className="material-symbols-outlined">arrow_back</span>
-              </button>
-              <button
-                className="btn-primary flex-1 animate-pulse-glow"
-                onClick={handleSubmit}
-                type="button"
-              >
-                Calculer mon estimation
-              </button>
-            </div>
-          </section>
-        )}
 
-      </main>
 
-      {/* ── Footer (unchanged) ── */}
-      <footer className="px-6 pb-6 flex flex-col items-center gap-1">
-        <p className="text-[10px] uppercase tracking-widest text-center text-muted">
-          Données vérifiées par des professionnels agréés | 2026
-        </p>
-        <div className="flex gap-4">
-          <span className="text-[10px] uppercase tracking-widest text-muted hover:text-primary cursor-pointer transition-colors">Security</span>
-          <span className="text-[10px] uppercase tracking-widest text-muted hover:text-primary cursor-pointer transition-colors">Terms</span>
+                <div className="glass-card p-6">
+                  <SectionLabel>Type de toiture</SectionLabel>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      className={`option-card items-center justify-center text-center p-4 ${formData.roof_type === 'terrasse_plate' ? 'selected' : ''}`}
+                      onClick={() => updateField('roof_type', 'terrasse_plate')}
+                    >
+                      <IconRoofFlat className="w-10 h-10 mb-2" />
+                      <span className="font-bold">Terrasse plate</span>
+                      <span className="text-xs text-text-muted">Standard Algérie</span>
+                    </button>
+                    <button
+                      className={`option-card items-center justify-center text-center p-4 ${formData.roof_type === 'tuiles' ? 'selected' : ''}`}
+                      onClick={() => updateField('roof_type', 'tuiles')}
+                    >
+                      <IconRoofTiled className="w-10 h-10 mb-2" />
+                      <span className="font-bold">Tuiles</span>
+                      <span className="text-xs text-text-muted">Pente / Charpente</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 3: Famille */}
+            {currentStep === 3 && (
+              <div className="space-y-8 animate-step-in">
+                <div className="glass-card p-6">
+                  <SectionLabel>Composition du foyer</SectionLabel>
+                  <div className="flex items-center gap-6 mt-4">
+                    <button 
+                      className="w-12 h-12 rounded-full border border-border-strong flex items-center justify-center text-2xl hover:bg-bg-surface-4 transition-colors"
+                      onClick={() => updateField('family_size', Math.max(1, familyValue - 1))}
+                    >
+                      -
+                    </button>
+                    <div className="flex-1 text-center font-mono text-4xl font-bold text-orange">
+                      {familyValue || 0}
+                    </div>
+                    <button 
+                      className="w-12 h-12 rounded-full border border-border-strong flex items-center justify-center text-2xl hover:bg-bg-surface-4 transition-colors"
+                      onClick={() => updateField('family_size', familyValue + 1)}
+                    >
+                      +
+                    </button>
+                  </div>
+                  <ErrorMsg message={errors.family_size} />
+                </div>
+
+                <div className="glass-card p-6">
+                  <SectionLabel>Cohabitation (Générations)</SectionLabel>
+                  <div className="grid grid-cols-2 gap-3 mt-4">
+                    <button
+                      className={`option-card ${formData.generations === 1 ? 'selected' : ''}`}
+                      onClick={() => updateField('generations', 1)}
+                    >
+                      <span className="font-bold">1 génération</span>
+                      <span className="text-xs">Parents + enfants</span>
+                    </button>
+                    <button
+                      className={`option-card ${formData.generations === 2 ? 'selected' : ''}`}
+                      onClick={() => updateField('generations', 2)}
+                    >
+                      <span className="font-bold">2 générations</span>
+                      <span className="text-xs">Avec grands-parents</span>
+                    </button>
+                  </div>
+                  {formData.generations > 1 && (
+                    <label className="flex items-center gap-3 mt-4 p-3 rounded-md bg-bg-surface-4 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-5 h-5 accent-orange rounded bg-bg-surface-2 border-border-strong"
+                        checked={formData.independent_generations}
+                        onChange={e => updateField('independent_generations', e.target.checked)}
+                      />
+                      <span className="text-sm font-medium">Créer des espaces de vie indépendants</span>
+                    </label>
+                  )}
+                </div>
+
+                <div className="glass-card p-6">
+                  <SectionLabel>Mode de vie</SectionLabel>
+                  <div className="space-y-6 mt-4">
+                    <div>
+                      <label className="text-sm font-medium text-text-secondary block mb-3">Réception d'invités</label>
+                      <div className="flex gap-2">
+                        {[
+                          { id: 'LOW', label: 'Rarement' },
+                          { id: 'MEDIUM', label: 'Régulièrement' },
+                          { id: 'HIGH', label: 'Fréquemment' }
+                        ].map(freq => (
+                          <button
+                            key={freq.id}
+                            className={`flex-1 py-2 px-3 rounded-full border text-sm font-medium transition-colors ${
+                              formData.guest_frequency === freq.id 
+                                ? 'bg-orange border-orange text-white' 
+                                : 'border-border-strong text-text-secondary hover:bg-bg-surface-4'
+                            }`}
+                            onClick={() => updateField('guest_frequency', freq.id)}
+                          >
+                            {freq.label}
+                          </button>
+                        ))}
+                      </div>
+                      <ErrorMsg message={errors.guest_frequency} />
+                    </div>
+
+                    <div className="border-t border-border-subtle pt-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <label className="text-sm font-medium text-text-secondary">Véhicules à garer</label>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm text-text-secondary">Possédez-vous un véhicule ?</span>
+                          <label className="toggle-switch">
+                            <input
+                              type="checkbox"
+                              checked={formData.has_car}
+                              onChange={e => updateField('has_car', e.target.checked)}
+                            />
+                            <span className="toggle-slider"></span>
+                          </label>
+                        </div>
+                      </div>
+                      
+                      {formData.has_car && (
+                        <div className="flex gap-2">
+                          {[1, 2, 3].map(num => (
+                            <button
+                              key={num}
+                              className={`flex-1 py-3 rounded-md border text-lg font-bold transition-colors ${
+                                formData.car_count === num 
+                                  ? 'bg-teal border-teal text-white' 
+                                  : 'border-border-strong text-text-secondary hover:bg-bg-surface-4'
+                              }`}
+                              onClick={() => updateField('car_count', num)}
+                            >
+                              {num} <span className="text-sm font-normal material-symbols-outlined ml-1">directions_car</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Step 4: Finitions */}
+            {currentStep === 4 && (
+              <div className="space-y-6 animate-step-in">
+                {[
+                  {
+                    id: 'economy',
+                    label: 'Économique',
+                    badge: 'badge-economy',
+                    price: 'Prix bas',
+                    items: ['Menuiserie locale PVC', 'Dalle de sol locale', 'Peinture monocouche', 'Sanitaires basiques']
+                  },
+                  {
+                    id: 'standard',
+                    label: 'Standard',
+                    badge: 'badge-standard',
+                    price: 'Milieu de gamme',
+                    items: ['Aluminium double vitrage', 'Dalle de sol 1er choix', 'Peinture vinyle / satinée', 'Sanitaires import / haute qualité']
+                  },
+                  {
+                    id: 'premium',
+                    label: 'Haut Standing',
+                    badge: 'badge-premium',
+                    price: 'Luxe',
+                    items: ['Aluminium TPR / Rideaux ext', 'Marbre / Porcelaine', 'Peinture décorative', 'Chauffage central / Clim encastrée']
+                  }
+                ].map(level => (
+                  <button
+                    key={level.id}
+                    className={`option-card p-5 gap-4 relative overflow-hidden text-left ${formData.finish_level === level.id ? 'selected teal-accent' : ''}`}
+                    onClick={() => updateField('finish_level', level.id)}
+                  >
+                    <div className="flex justify-between items-center">
+                      <div className="font-display font-bold text-lg">{level.label}</div>
+                      <span className={level.badge}>{level.price}</span>
+                    </div>
+                    <ul className="text-sm text-text-secondary space-y-2 mt-2">
+                      {level.items.map((item, i) => (
+                        <li key={i} className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-teal text-sm">check_circle</span>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                    {formData.finish_level === level.id && (
+                      <div className="absolute inset-0 border-2 border-teal rounded-md pointer-events-none"></div>
+                    )}
+                  </button>
+                ))}
+                <ErrorMsg message={errors.finish_level} />
+              </div>
+            )}
+
+            {/* Step 5: Résumé */}
+            {currentStep === 5 && (
+              <div className="space-y-8 animate-step-in">
+                <div className="glass-card p-6 border-l-4 border-orange">
+                  <h3 className="text-lg font-bold mb-4">Vérification des données</h3>
+                  
+                  <div className="grid gap-4">
+                    <div className="flex justify-between items-center py-2 border-b border-border-subtle">
+                      <span className="text-text-muted">Surface construite</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold">{formData.built_width_m} × {formData.built_depth_m} m ({builtArea} m²)</span>
+                        <button onClick={() => goToStep(0)} className="text-orange hover:opacity-80"><span className="material-symbols-outlined text-sm">edit</span></button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center py-2 border-b border-border-subtle">
+                      <span className="text-text-muted">Localisation</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold">Wilaya {formData.wilaya}</span>
+                        <button onClick={() => goToStep(0)} className="text-orange hover:opacity-80"><span className="material-symbols-outlined text-sm">edit</span></button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center py-2 border-b border-border-subtle">
+                      <span className="text-text-muted">Budget Net</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-mono font-bold text-teal">{formatNumber(computeConstructionBudget())} DA</span>
+                        <button onClick={() => goToStep(1)} className="text-orange hover:opacity-80"><span className="material-symbols-outlined text-sm">edit</span></button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center py-2 border-b border-border-subtle">
+                      <span className="text-text-muted">Volume</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold">{floorLabel?.label}</span>
+                        <button onClick={() => goToStep(2)} className="text-orange hover:opacity-80"><span className="material-symbols-outlined text-sm">edit</span></button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center py-2 border-b border-border-subtle">
+                      <span className="text-text-muted">Famille</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold">{formData.family_size} pers. ({formData.generations} gen)</span>
+                        <button onClick={() => goToStep(3)} className="text-orange hover:opacity-80"><span className="material-symbols-outlined text-sm">edit</span></button>
+                      </div>
+                    </div>
+                    
+                    <div className="flex justify-between items-center py-2">
+                      <span className="text-text-muted">Finitions</span>
+                      <div className="flex items-center gap-3">
+                        <span className="font-bold capitalize">{formData.finish_level}</span>
+                        <button onClick={() => goToStep(4)} className="text-orange hover:opacity-80"><span className="material-symbols-outlined text-sm">edit</span></button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-orange-dim rounded-lg p-6 text-center">
+                  <span className="material-symbols-outlined text-orange text-4xl mb-3">auto_awesome</span>
+                  <h4 className="text-lg font-bold text-text-primary mb-2">Prêt à générer ?</h4>
+                  <p className="text-sm text-text-secondary mb-6">
+                    Notre IA architecturale va traiter vos critères, appliquer les normes de construction algériennes et optimiser vos espaces en temps réel.
+                  </p>
+                  <button 
+                    className="btn-primary lg w-full"
+                    onClick={handleSubmit}
+                  >
+                    Lancer l'Intelligence Artificielle
+                    <span className="material-symbols-outlined ml-2">rocket_launch</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
+
+      {/* ── Fixed Footer Navigation ── */}
+      <footer className="fixed bottom-0 left-0 lg:left-60 right-0 bg-bg-surface/95 backdrop-blur-md border-t border-border-subtle p-4 z-40">
+        <div className="max-w-2xl mx-auto flex justify-between items-center w-full">
+          {currentStep > 0 ? (
+            <button className="btn-ghost" onClick={goBack}>
+              <span className="material-symbols-outlined text-lg">arrow_back</span>
+              Retour
+            </button>
+          ) : (
+            <div></div>
+          )}
+          
+          {currentStep < STEPS.length - 1 ? (
+            <button className="btn-primary" onClick={goNext}>
+              Suivant
+              <span className="material-symbols-outlined text-lg">arrow_forward</span>
+            </button>
+          ) : null}
         </div>
       </footer>
 
-      {/* ── Overlays (unchanged) ── */}
-      {(status === 'loading' || status === 'error') && (
+      {/* ── Loading Overlay ── */}
+      {status === 'loading' && (
         <div className="status-overlay">
-          {status === 'loading' && (
-            <div className="bg-card border border-border rounded-xl p-10 text-center max-w-sm w-[90%] shadow-lg animate-scale-in">
-              <div className="spinner" />
-              <h3 className="text-lg font-bold text-primary mb-2">Génération en cours...</h3>
-              <p className="text-sm text-muted">
-                Nous concevons votre plan de maison. Cela peut prendre quelques secondes.
-              </p>
-            </div>
-          )}
-          {status === 'error' && (
-            <div className="bg-card border border-danger/20 rounded-xl p-10 text-center max-w-sm w-[90%] shadow-lg animate-scale-in">
-              <div className="text-4xl mb-4">
-                <span className="material-symbols-outlined text-danger" style={{ fontSize: '48px' }}>error</span>
+          <div className="text-center bg-bg-surface-2 p-8 rounded-xl border border-border-strong shadow-2xl max-w-sm w-full mx-4">
+            <div className="spinner"></div>
+            <h3 className="text-xl font-bold mb-2">Génération en cours</h3>
+            <div className="text-sm text-text-secondary h-6 overflow-hidden">
+              <div className="animate-[scrollText_8s_steps(4)_infinite]">
+                <div>Analyse topographique...</div>
+                <div>Application règles d'urbanisme...</div>
+                <div>Calcul devis structure...</div>
+                <div>Optimisation des espaces...</div>
               </div>
-              <h3 className="text-lg font-bold text-danger mb-2">Erreur de génération</h3>
-              <p className="text-sm text-muted mb-6 whitespace-pre-line text-left">{errorMessage}</p>
-              <button className="btn-secondary" onClick={dismissError}>Réessayer</button>
             </div>
-          )}
+            <div className="mt-6 h-1 w-full bg-border-light rounded-full overflow-hidden">
+              <div className="h-full bg-orange animate-[pulseWidth_2s_ease-in-out_infinite]"></div>
+            </div>
+            <p className="text-xs text-text-muted mt-4">Environ 5 à 15 secondes...</p>
+          </div>
         </div>
       )}
-    </>
+
+      {/* ── Error Overlay ── */}
+      {status === 'error' && (
+        <div className="status-overlay">
+          <div className="text-center bg-bg-surface-2 p-8 rounded-xl border border-danger shadow-2xl max-w-sm w-full mx-4 animate-scale-in">
+            <span className="material-symbols-outlined text-danger text-5xl mb-4">error</span>
+            <h3 className="text-xl font-bold mb-2 text-danger">Erreur de Génération</h3>
+            <p className="text-sm text-text-secondary mb-6">{errorMessage}</p>
+            <div className="text-left bg-bg-surface-4 p-4 rounded-md mb-6 max-h-32 overflow-y-auto border border-border-subtle">
+              {Object.entries(errors).map(([key, msg]) => (
+                <div key={key} className="text-xs text-danger flex items-start gap-2 mb-1">
+                  <span className="material-symbols-outlined text-[14px]">warning</span>
+                  {msg}
+                </div>
+              ))}
+            </div>
+            <button className="btn-ghost w-full justify-center" onClick={dismissError}>
+              Corriger les erreurs
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
